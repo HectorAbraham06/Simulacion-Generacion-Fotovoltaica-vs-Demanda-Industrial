@@ -101,7 +101,7 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, ti
 st.sidebar.header("🛠️ Configuración de Parámetros")
 
 with st.sidebar.expander("1. Geolocalización", expanded=True):
-    latitud = st.number_input("Latitud (°)", value=40, step=0.1, format="%.4f")
+    latitud = st.number_input("Latitud (°)", value=40.0, step=0.1, format="%.4f")
     longitud = st.number_input("Longitud (°)", value=-100, step=0.1, format="%.4f")
     altitud = st.number_input("Altitud (msnm)", value=500, step=10)
     zona_horaria = st.selectbox("Zona Horaria", ['Etc/GMT+6', 'Etc/GMT+7', 'America/Mexico_City'])
