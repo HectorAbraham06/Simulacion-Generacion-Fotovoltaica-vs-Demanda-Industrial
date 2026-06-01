@@ -94,6 +94,11 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, ti
     
     return poa_global, potencia_kw, energia_kwh, clearsky['ghi']
 
+def obtener_zona_horaria(lat, lon):
+    tf = TimezoneFinder()
+    zona = tf.timezone_at(lng=lon, lat=lat)
+    return zona if zona else 'UTC'
+
 # =============================================================================
 # INTERFAZ DE USUARIO (STREAMLIT SIDEBAR)
 # =============================================================================
@@ -104,7 +109,8 @@ with st.sidebar.expander("1. Geolocalización", expanded=True):
     latitud = st.number_input("Latitud (°)", value=40.0, step=0.1, format="%.4f")
     longitud = st.number_input("Longitud (°)", value=-100.0, step=0.1, format="%.4f")
     altitud = st.number_input("Altitud (msnm)", value=500, step=10)
-    zona_horaria = st.selectbox("Zona Horaria", ['Etc/GMT+6', 'Etc/GMT+7', 'America/Mexico_City'])
+
+zona_horaria = obtener_zona_horaria(latitud, longitud)
 
 with st.sidebar.expander("2. Especificaciones de Paneles", expanded=True):
     potencia_w = st.number_input("Potencia de un panel (W)", value=440, step=5)
