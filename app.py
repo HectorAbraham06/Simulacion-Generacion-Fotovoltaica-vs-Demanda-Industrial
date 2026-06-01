@@ -190,7 +190,7 @@ st.markdown("---")
 # --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
 st.subheader("📈 Generación VS. Demanda en el tiempo")
 st.markdown("Filtra un rango de fechas específico para inspeccionar la interacción entre la curva de generación solar y la demanda de la planta.")
-st.markdown("## *(La simulación abarca valores de 2026 solamente)* ##")
+st.markdown("*(La simulación abarca valores de 2026 solamente)*")
 # Control de fecha para el filtro dinámico de la gráfica
 col_f1, col_f2 = st.columns(2)
 with col_f1:
