@@ -101,8 +101,8 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, ti
 st.sidebar.header("🛠️ Configuración de Parámetros")
 
 with st.sidebar.expander("1. Geolocalización", expanded=True):
-    latitud = st.number_input("Latitud (°)", value=25.6, step=0.1, format="%.4f")
-    longitud = st.number_input("Longitud (°)", value=-100.3, step=0.1, format="%.4f")
+    latitud = st.number_input("Latitud (°)", value=40, step=0.1, format="%.4f")
+    longitud = st.number_input("Longitud (°)", value=-100, step=0.1, format="%.4f")
     altitud = st.number_input("Altitud (msnm)", value=500, step=10)
     zona_horaria = st.selectbox("Zona Horaria", ['Etc/GMT+6', 'Etc/GMT+7', 'America/Mexico_City'])
 
@@ -188,9 +188,9 @@ col4.metric("Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
 st.markdown("---")
 
 # --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
-st.subheader("📈 Comportamiento Temporal Dinámico")
+st.subheader("📈 Generación VS. Demanda en el tiempo")
 st.markdown("Filtra un rango de fechas específico para inspeccionar la interacción entre la curva de generación solar y la demanda de la planta.")
-
+st.markdown("## *(La simulación abarca valores de 2026 solamente)* ##")
 # Control de fecha para el filtro dinámico de la gráfica
 col_f1, col_f2 = st.columns(2)
 with col_f1:
@@ -242,7 +242,7 @@ csv_data = df_analisis.drop(columns=['Fecha_Solo']).to_csv(index=False).encode('
 st.download_button(
     label="📥 Descargar Series Temporales Completas (CSV)",
     data=csv_data,
-    file_name="motor_generacion_y_demanda_anual.csv",
+    file_name="generacion_y_demanda_anual.csv",
     mime="text/csv",
     use_container_width=True
 )
