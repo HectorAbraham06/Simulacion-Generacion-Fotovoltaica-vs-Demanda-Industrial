@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import pvlib
 import plotly.graph_objects as go
+from timezonefinder import TimezoneFinder
 
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
