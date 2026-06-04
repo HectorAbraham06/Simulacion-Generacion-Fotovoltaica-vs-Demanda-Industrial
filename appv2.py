@@ -10,11 +10,13 @@ from timezonefinder import TimezoneFinder
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
 
 st.markdown("""
+<style>
+[data-testid="stHeaderActionElements"] { display: none; }
+</style>
 <div style="margin-bottom:1.5rem;">
-    <h2 style="margin-bottom:0.25rem;font-weight:700;">
+    <h2 style="margin-bottom:0.4rem;font-weight:700;">
         Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial
     </h2>
-    <div style="width:60px;height:3px;background:#F59E0B;border-radius:2px;margin-bottom:0.6rem;"></div>
     <p style="color:#64748b;font-size:0.9rem;margin:0;">
         Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.
     </p>
@@ -148,7 +150,9 @@ def obtener_zona_horaria(lat, lon):
 st.sidebar.header("🛠️ Configuración de Parámetros")
 
 with st.sidebar.form(key="formulario_parametros"):
-    
+
+    ejecutar_simulacion = st.form_submit_button(label="🚀 Iniciar Simulación", use_container_width=True)
+
     with st.sidebar.expander("1. Geolocalización", expanded=True):
         latitud = st.number_input("Latitud (°)", value=19.4791, step=0.1, format="%.4f")
         longitud = st.number_input("Longitud (°)", value=-96.9500, step=0.1, format="%.4f")
@@ -179,9 +183,6 @@ with st.sidebar.form(key="formulario_parametros"):
         precio_kwh = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0, value=2.82, step=0.01, format="%.2f")
         tipo_moneda = st.selectbox("Divisa", ["MXN ($)", "USD ($)"], index=0)
 
-    # Botón de ejecución controlado
-    st.sidebar.markdown("---")
-    ejecutar_simulacion = st.form_submit_button(label="🚀 Iniciar Simulación", use_container_width=True)
 
 # =============================================================================
 # LOGICA DE CONTROL Y RENDERIZADO
@@ -270,6 +271,8 @@ render_kpi(col2, "Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
 render_kpi(col3, "Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
 render_kpi(col4, "Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
 
+st.markdown("<div style='margin-bottom:2rem;'></div>", unsafe_allow_html=True)
+
 # --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
 st.subheader("📈 Generación VS. Demanda en el tiempo")
 st.caption("Filtra un rango de fechas para inspeccionar la interacción entre generación solar y demanda de la planta. Datos del año 2026.")
@@ -321,25 +324,10 @@ st.subheader("💰 Análisis de Impacto Económico")
 
 # 1. Fila de Métricas Financieras Clave
 col_econ1, col_econ2, col_econ3 = st.columns(3)
-
-with col_econ1:
-    st.metric(
-        label="Tarifa Eléctrica Base",
-        value=f"{precio_kwh:.2f} {st.session_state.divisa}/kWh"
-    )
-
-with col_econ2:
-    st.metric(
-        label="Ahorro Económico Anual Estimado",
-        value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
-    )
-
-with col_econ3:
-    ahorro_promedio_mes = st.session_state.ahorro_anual / 12
-    st.metric(
-        label="Ahorro Mensual Promedio",
-        value=f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}"
-    )
+ahorro_promedio_mes = st.session_state.ahorro_anual / 12
+render_kpi(col_econ1, "Tarifa Eléctrica Base", f"{precio_kwh:.2f} {st.session_state.divisa}/kWh")
+render_kpi(col_econ2, "Ahorro Económico Anual Estimado", f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}")
+render_kpi(col_econ3, "Ahorro Mensual Promedio", f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}")
 
 # 2. Desglose detallado mes a mes en un expansor para no saturar la pantalla
 with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
