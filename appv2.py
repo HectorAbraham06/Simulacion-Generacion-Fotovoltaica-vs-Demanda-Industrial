@@ -227,6 +227,8 @@ if ejecutar_simulacion or st.session_state.df_resultados is None:
         }).reset_index()
         
         # Guardar en el session_state para que las gráficas lo lean de forma estable
+        
+        st.session_state.energia_anual = energia_anual_total
         st.session_state.ahorro_anual = ahorro_anual_total
         st.session_state.df_mensual = df_mensual
         st.session_state.divisa = tipo_moneda.split(" ")[0]
@@ -272,7 +274,7 @@ with col_econ2:
     st.metric(
         label="Ahorro Económico Anual Estimado",
         value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
-        delta=f"Equivalente a {energia_anual_total:,.0f} kWh descarbonizados",
+        delta=f"Equivalente a {st.session_state.energia_anual:,.0f} kWh descarbonizados",
         delta_color="inverse"
     )
 
