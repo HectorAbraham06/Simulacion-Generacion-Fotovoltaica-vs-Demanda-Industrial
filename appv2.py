@@ -246,7 +246,7 @@ if ejecutar_simulacion or st.session_state.df_resultados is None:
 df_analisis = st.session_state.df_resultados
 resumen = st.session_state.resumen
 
-# --- PANELES DE INFORME Y MÉTRICAS CLAVE ---
+st.subheader("⚡ Resumen del Sistema")
 col1, col2, col3, col4 = st.columns(4)
 col1.metric("Energía Solar Anual", f"{resumen['energia_fv_anual']:,.1f} kWh")
 col2.metric("Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
@@ -254,50 +254,6 @@ col3.metric("Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp"
 col4.metric("Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
 
 st.markdown("---")
-
-# =============================================================================
-# NUEVA SECCIÓN: ANÁLISIS ECONÓMICO Y DE AHORROS
-# =============================================================================
-st.subheader("Análisis de Impacto Económico ")
-
-# 1. Fila de Métricas Financieras Clave
-col_econ1, col_econ2, col_econ3 = st.columns(3)
-
-with col_econ1:
-    st.metric(
-        label="Tarifa Eléctrica Base",
-        value=f"{precio_kwh:.2f} {st.session_state.divisa}/kWh"
-    )
-
-with col_econ2:
-    st.metric(
-        label="Ahorro Económico Anual Estimado",
-        value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
-    )
-
-with col_econ3:
-    # Promedio mensual estimado
-    ahorro_promedio_mes = st.session_state.ahorro_anual / 12
-    st.metric(
-        label="Ahorro Mensual Promedio",
-        value=f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}"
-    )
-
-# 2. Desglose detallado mes a mes en un expansor para no saturar la pantalla
-with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
-    st.markdown("A continuación se muestra el retorno económico mensualizado calculado de forma directa:")
-    
-    # Formatear la tabla para una visualización profesional antes de mostrarla
-    tabla_formateada = st.session_state.df_mensual.copy()
-    tabla_formateada.columns = ['Mes de Simulación', 'Energía Generada (kWh)', f'Ahorro Estimado ({st.session_state.divisa})']
-    
-    st.dataframe(
-        tabla_formateada.style.format({
-            'Energía Generada (kWh)': '{:,.2f}',
-            f'Ahorro Estimado ({st.session_state.divisa})': '${:,.2f}'
-        }),
-        use_container_width=True
-    )
 
 # --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
 st.subheader("📈 Generación VS. Demanda en el tiempo")
@@ -316,14 +272,14 @@ df_filtrado = df_analisis[(df_analisis['Fecha_Solo'] >= fecha_inicio) & (df_anal
 
 if not df_filtrado.empty:
     fig = go.Figure()
-    
+
     # Trazado de Demanda de Carga
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Demanda_kW'],
         mode='lines', name='Demanda Industrial (kW)',
         line=dict(color='#EF553B', width=2)
     ))
-    
+
     # Trazado de Generación Solar
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Generacion_Con_Sombra_kW'],
@@ -339,11 +295,54 @@ if not df_filtrado.empty:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=40, b=20)
     )
-    
+
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.warning("No hay datos disponibles para el rango de fechas seleccionado.")
 
+st.markdown("---")
+
+# =============================================================================
+# ANÁLISIS ECONÓMICO Y DE AHORROS
+# =============================================================================
+st.subheader("💰 Análisis de Impacto Económico")
+
+# 1. Fila de Métricas Financieras Clave
+col_econ1, col_econ2, col_econ3 = st.columns(3)
+
+with col_econ1:
+    st.metric(
+        label="Tarifa Eléctrica Base",
+        value=f"{precio_kwh:.2f} {st.session_state.divisa}/kWh"
+    )
+
+with col_econ2:
+    st.metric(
+        label="Ahorro Económico Anual Estimado",
+        value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
+    )
+
+with col_econ3:
+    ahorro_promedio_mes = st.session_state.ahorro_anual / 12
+    st.metric(
+        label="Ahorro Mensual Promedio",
+        value=f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}"
+    )
+
+# 2. Desglose detallado mes a mes en un expansor para no saturar la pantalla
+with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
+    st.markdown("A continuación se muestra el retorno económico mensualizado calculado de forma directa:")
+
+    tabla_formateada = st.session_state.df_mensual.copy()
+    tabla_formateada.columns = ['Mes de Simulación', 'Energía Generada (kWh)', f'Ahorro Estimado ({st.session_state.divisa})']
+
+    st.dataframe(
+        tabla_formateada.style.format({
+            'Energía Generada (kWh)': '{:,.2f}',
+            f'Ahorro Estimado ({st.session_state.divisa})': '${:,.2f}'
+        }),
+        use_container_width=True
+    )
 
 st.markdown("---")
 st.subheader("📊 Módulo de Análisis Avanzado del Proyecto")
@@ -359,6 +358,15 @@ opcion_grafica = st.selectbox(
         "Recurso Solar: Matriz de Irradiancia Promedio Horaria"  # <-- NUEVA OPCIÓN
     ]
 )
+
+_opciones_con_filtro = [
+    "Comparativa: Generación Con Sombra vs. Sin Sombra",
+    "Pérdidas: Fracción de Sombra Total del Arreglo",
+]
+if opcion_grafica in _opciones_con_filtro:
+    st.caption("Se aplica el rango de fechas seleccionado en la sección anterior.")
+else:
+    st.info("Esta vista muestra datos anuales completos. El filtro de fechas no aplica aquí.", icon="ℹ️")
 
 # Filtro de fecha reutilizado para la segunda gráfica
 df_filtrado_avanzado = df_analisis[(df_analisis['Fecha_Solo'] >= fecha_inicio) & (df_analisis['Fecha_Solo'] <= fecha_fin)]
@@ -380,7 +388,7 @@ if not df_filtrado_avanzado.empty:
             line=dict(color='#636EFA', width=2.5),
             fill='tozeroy', fillcolor='rgba(99, 110, 250, 0.1)'
         ))
-        fig_avanzada.update_layout(yaxis_title="Potencia Eléctrica (kW)")
+        fig_avanzada.update_layout(xaxis_title="Fecha y Hora", yaxis_title="Potencia Eléctrica (kW)")
 
     elif opcion_grafica == "Pérdidas: Fracción de Sombra Total del Arreglo":
         # Línea de porcentaje o fracción de sombra (va de 0 a 1)
@@ -390,7 +398,7 @@ if not df_filtrado_avanzado.empty:
             line=dict(color='#7F7F7F', width=2),
             fill='tozeroy', fillcolor='rgba(127, 127, 127, 0.2)'
         ))
-        fig_avanzada.update_layout(yaxis_title="Porcentaje de Sombra (%)", yaxis=dict(range=[0, 105]))
+        fig_avanzada.update_layout(xaxis_title="Fecha y Hora", yaxis_title="Porcentaje de Sombra (%)", yaxis=dict(range=[0, 105]))
 
     elif opcion_grafica == "Financiero: Ahorro Económico Mensualizado":
         # Gráfica de barras para representar el dinero ahorrado al mes
@@ -402,7 +410,7 @@ if not df_filtrado_avanzado.empty:
             text=[f"${x:,.0f}" for x in st.session_state.df_mensual['Ahorro_Monetario']],
             textposition='auto',
         ))
-        fig_avanzada.update_layout(yaxis_title=f"Ahorro acumulado ({st.session_state.divisa})")
+        fig_avanzada.update_layout(xaxis_title="Mes", yaxis_title=f"Ahorro acumulado ({st.session_state.divisa})")
 
     elif opcion_grafica == "Recurso Solar: Matriz de Irradiancia Promedio Horaria":
         # 1. Extraer componentes de hora y mes del DataFrame completo de análisis
@@ -446,17 +454,15 @@ if not df_filtrado_avanzado.empty:
         )
 
     fig_avanzada.update_layout(
-        xaxis_title="Fecha y Hora",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=40, b=20)
     )
     
     st.plotly_chart(fig_avanzada, use_container_width=True)
 
 # --- SECCIÓN DE EXPORTACIÓN Y DESCARGAS ---
 st.markdown("---")
-st.subheader("Descarga de Datos Estructurados")
+st.subheader("💾 Descarga de Datos Estructurados")
 
 # Preparación del archivo csv de salida en formato String para el componente de descarga
 csv_data = df_analisis.drop(columns=['Fecha_Solo']).to_csv(index=False).encode('utf-8')
