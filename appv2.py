@@ -11,7 +11,8 @@ st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout=
 
 st.markdown("""
 <style>
-[data-testid="metric-container"] {
+[data-testid="metric-container"],
+div.css-1r6slb0, div.css-12w0qpk, div.css-1xarl3l {
     background-color: rgba(245, 158, 11, 0.07);
     border-left: 4px solid #F59E0B;
     border-radius: 6px;
