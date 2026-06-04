@@ -355,7 +355,9 @@ opcion_grafica = st.selectbox(
     "Selecciona los datos que deseas analizar en la gráfica:",
     [
         "Comparativa: Generación Con Sombra vs. Sin Sombra",
-        "Pérdidas: Fracción de Sombra Total del Arreglo"
+        "Pérdidas: Fracción de Sombra Total del Arreglo",
+        "Financiero: Ahorro Económico Mensualizado",
+        "Recurso Solar: Matriz de Irradiancia Promedio Horaria"  # <-- NUEVA OPCIÓN
     ]
 )
 
@@ -390,6 +392,63 @@ if not df_filtrado_avanzado.empty:
             fill='tozeroy', fillcolor='rgba(127, 127, 127, 0.2)'
         ))
         fig_avanzada.update_layout(yaxis_title="Porcentaje de Sombra (%)", yaxis=dict(range=[0, 105]))
+
+    elif opcion_grafica == "Financiero: Ahorro Económico Mensualizado":
+        # Gráfica de barras para representar el dinero ahorrado al mes
+        fig_avanzada.add_trace(go.Bar(
+            x=st.session_state.df_mensual['Mes'], 
+            y=st.session_state.df_mensual['Ahorro_Monetario'],
+            name=f'Ahorro ({st.session_state.divisa})',
+            marker_color='#2CA02C',
+            text=[f"${x:,.0f}" for x in st.session_state.df_mensual['Ahorro_Monetario']],
+            textposition='auto',
+        ))
+        fig_avanzada.update_layout(yaxis_title=f"Ahorro acumulado ({st.session_state.divisa})")
+
+    elif opcion_grafica == "Recurso Solar: Matriz de Irradiancia Promedio Horaria":
+        # 1. Extraer componentes de hora y mes del DataFrame completo de análisis
+        df_completo = df_analisis.copy()
+        df_completo['Hora_Str'] = df_completo['Fecha_Hora'].dt.strftime('%H:00')
+        df_completo['Mes_Num'] = df_completo['Fecha_Hora'].dt.month
+        
+        # Mapeo de meses en español para los encabezados de la matriz
+        meses_es = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
+                    7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
+        df_completo['Mes_Str'] = df_completo['Mes_Num'].map(meses_es)
+
+        # 2. Agrupar por Hora y Mes para obtener el promedio de irradiancia en el plano (POA)
+        df_matriz = df_completo.groupby(['Hora_Str', 'Mes_Num', 'Mes_Str'])['POA_Original_W_m2'].mean().reset_index()
+
+        # 3. Pivotar los datos para crear el formato de matriz (Filas: Horas, Columnas: Meses)
+        df_pivot = df_matriz.pivot(index='Hora_Str', columns='Mes_Num', values='POA_Original_W_m2')
+        
+        # Reordenar las columnas usando los nombres de los meses en español
+        nombres_columnas = [meses_es[m] for m in sorted(df_pivot.columns)]
+        
+        # 4. Construir el Heatmap con Plotly
+        fig_avanzada = go.Figure(data=go.Heatmap(
+            z=df_pivot.values,
+            x=nombres_columnas,
+            y=df_pivot.index,
+            colorscale='Jet',  # La escala 'Jet' replica perfectamente el gradiente Azul -> Verde -> Amarillo -> Rojo de tu imagen
+            colorbar=dict(title="Irradiancia (W/m²)"),
+            hovertemplate="Mes: %{x}<br>Hora: %{y}<br>Irradiancia Promedio: %{z:.1f} W/m²<extra></extra>",
+            text=np.round(df_pivot.values, 0), # Redondeamos los valores a mostrar
+            texttemplate="%{text}",            # Esto dibuja los números dentro de las celdas
+            textfont=dict(size=9, color="black") # Ajuste de fuente para legibilidad
+        ))
+
+        # 5. Configuración estética del layout
+        fig_avanzada.update_layout(
+            title=dict(
+                text="<b>MATRIZ DE IRRADIANCIA PROMEDIO HORARIA POR MES [W/m²]</b><br>Superficie Inclinada del Proyecto",
+                x=0.5, halign='center'
+            ),
+            xaxis=dict(title="Meses", side="top"), # Coloca los meses arriba igual que en la imagen
+            yaxis=dict(title="Hora del Día", autoraise=False, autorange="reverse"), # Invierte el eje Y para que las 00:00 queden arriba
+            height=600, # Le damos suficiente altura para que se aprecien bien los números de cada celda
+            margin=dict(l=40, r=40, t=80, b=40)
+        )
 
     fig_avanzada.update_layout(
         xaxis_title="Fecha y Hora",
