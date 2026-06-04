@@ -329,7 +329,8 @@ render_kpi(col_econ1, "Tarifa Eléctrica Base", f"{precio_kwh:.2f} {st.session_s
 render_kpi(col_econ2, "Ahorro Económico Anual Estimado", f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}")
 render_kpi(col_econ3, "Ahorro Mensual Promedio", f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}")
 
-# 2. Desglose detallado mes a mes en un expansor para no saturar la pantalla
+st.markdown("<div style='margin-bottom:1.5rem;'></div>", unsafe_allow_html=True)
+
 with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
     st.markdown("A continuación se muestra el retorno económico mensualizado calculado de forma directa:")
 
@@ -343,6 +344,8 @@ with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=Fa
         }),
         use_container_width=True
     )
+
+st.markdown("<div style='margin-bottom:1.5rem;'></div>", unsafe_allow_html=True)
 
 st.subheader("📊 Módulo de Análisis Avanzado del Proyecto")
 st.markdown("Utiliza el siguiente menú para evaluar parámetros específicos del comportamiento del sistema.")
