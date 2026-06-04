@@ -9,8 +9,17 @@ from timezonefinder import TimezoneFinder
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
 
-st.header("Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial")
-st.caption("Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.")
+st.markdown("""
+<div style="margin-bottom:1.5rem;">
+    <h2 style="margin-bottom:0.25rem;font-weight:700;">
+        Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial
+    </h2>
+    <div style="width:60px;height:3px;background:#F59E0B;border-radius:2px;margin-bottom:0.6rem;"></div>
+    <p style="color:#64748b;font-size:0.9rem;margin:0;">
+        Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.
+    </p>
+</div>
+""", unsafe_allow_html=True)
 
 # =============================================================================
 # FUNCIONES DE SIMULACIÓN (BACKEND)
@@ -261,12 +270,9 @@ render_kpi(col2, "Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
 render_kpi(col3, "Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
 render_kpi(col4, "Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
 
-st.markdown("---")
-
 # --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
 st.subheader("📈 Generación VS. Demanda en el tiempo")
-st.markdown("Filtra un rango de fechas específico para inspeccionar la interacción entre la curva de generación solar y la demanda de la planta.")
-st.markdown("*(La simulación abarca valores de 2026 solamente)*")
+st.caption("Filtra un rango de fechas para inspeccionar la interacción entre generación solar y demanda de la planta. Datos del año 2026.")
 # Control de fecha para el filtro dinámico de la gráfica
 col_f1, col_f2 = st.columns(2)
 with col_f1:
@@ -285,7 +291,7 @@ if not df_filtrado.empty:
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Demanda_kW'],
         mode='lines', name='Demanda Industrial (kW)',
-        line=dict(color='#EF553B', width=2)
+        line=dict(color='#3B82F6', width=2)
     ))
 
     # Trazado de Generación Solar
@@ -307,8 +313,6 @@ if not df_filtrado.empty:
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.warning("No hay datos disponibles para el rango de fechas seleccionado.")
-
-st.markdown("---")
 
 # =============================================================================
 # ANÁLISIS ECONÓMICO Y DE AHORROS
@@ -352,7 +356,6 @@ with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=Fa
         use_container_width=True
     )
 
-st.markdown("---")
 st.subheader("📊 Módulo de Análisis Avanzado del Proyecto")
 st.markdown("Utiliza el siguiente menú para evaluar parámetros específicos del comportamiento del sistema.")
 
@@ -469,7 +472,6 @@ if not df_filtrado_avanzado.empty:
     st.plotly_chart(fig_avanzada, use_container_width=True)
 
 # --- SECCIÓN DE EXPORTACIÓN Y DESCARGAS ---
-st.markdown("---")
 st.subheader("💾 Descarga de Datos Estructurados")
 
 # Preparación del archivo csv de salida en formato String para el componente de descarga
