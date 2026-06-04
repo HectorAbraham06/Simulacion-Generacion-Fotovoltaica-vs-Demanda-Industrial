@@ -258,7 +258,6 @@ st.markdown("---")
 # =============================================================================
 # NUEVA SECCIÓN: ANÁLISIS ECONÓMICO Y DE AHORROS
 # =============================================================================
-st.markdown("---")
 st.subheader("Análisis de Impacto Económico ")
 
 # 1. Fila de Métricas Financieras Clave
@@ -274,8 +273,6 @@ with col_econ2:
     st.metric(
         label="Ahorro Económico Anual Estimado",
         value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
-        delta=f"Equivalente a {st.session_state.energia_anual:,.0f} kWh descarbonizados",
-        delta_color="inverse"
     )
 
 with col_econ3:
