@@ -114,9 +114,9 @@ with st.sidebar.expander("1. Geolocalización", expanded=True):
 zona_horaria = obtener_zona_horaria(latitud, longitud)
 
 with st.sidebar.expander("2. Especificaciones de Paneles", expanded=True):
-    potencia_w = st.number_input("Potencia de un panel (W)", value=440, step=5)
-    eficiencia = st.slider("Eficiencia del panel (%)", min_value=10.0, max_value=30.0, value=22.0, step=0.5) / 100.0
-    area_panel = st.number_input("Área del panel (m²)", value=2.0, step=0.1)
+    potencia_w = st.number_input("Potencia de un panel (W)", value=425, step=5)
+    eficiencia = st.slider("Eficiencia del panel (%)", min_value=10.0, max_value=30.0, value=21.8, step=0.1) / 100.0
+    area_panel = st.number_input("Área del panel (m²)", value=1.95, step=0.1)
     cantidad_paneles = st.number_input("Número total de paneles", min_value=1, value=120, step=10)
 
 with st.sidebar.expander("3. Geometría de Instalación", expanded=True):
