@@ -439,7 +439,6 @@ if not df_filtrado_avanzado.empty:
 
         # 5. Configuración estética del layout
         fig_avanzada.update_layout(
-            title="<b>MATRIZ DE IRRADIANCIA PROMEDIO HORARIA POR MES [W/m²]</b><br>Superficie Inclinada del Proyecto",
             xaxis=dict(title="Meses", side="top"), # Coloca los meses arriba
             yaxis=dict(title="Hora del Día", autorange="reversed"), # Invierte el eje Y
             height=600, 
