@@ -159,7 +159,7 @@ with st.sidebar.form(key="formulario_parametros"):
         factor_planta = st.slider("Factor de carga", min_value=0.00, max_value=1.00, value=0.60, step=0.01)
         
     with st.sidebar.expander("6. Parámetros Económicos", expanded=True):
-        precio_kwh = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0, value=2.80, step=0.10, format="%.2f")
+        precio_kwh = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0, value=2.82, step=0.01, format="%.2f")
         tipo_moneda = st.selectbox("Divisa", ["MXN ($)", "USD ($)"], index=0)
 
     # Botón de ejecución controlado
