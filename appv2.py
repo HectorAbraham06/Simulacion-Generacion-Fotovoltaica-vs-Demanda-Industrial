@@ -9,8 +9,19 @@ from timezonefinder import TimezoneFinder
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
 
-st.title("Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial")
-st.markdown("Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.")
+st.markdown("""
+<style>
+[data-testid="metric-container"] {
+    background-color: rgba(245, 158, 11, 0.07);
+    border-left: 4px solid #F59E0B;
+    border-radius: 6px;
+    padding: 12px 16px;
+}
+</style>
+""", unsafe_allow_html=True)
+
+st.header("Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial")
+st.caption("Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.")
 
 # =============================================================================
 # FUNCIONES DE SIMULACIÓN (BACKEND)
@@ -149,16 +160,16 @@ with st.sidebar.form(key="formulario_parametros"):
         inclinacion = st.slider("Inclinación / Tilt (°)", min_value=0, max_value=90, value=25)
         azimut = st.slider("Orientación / Azimut (°)", min_value=0.00, max_value=360.00, value=164.78, help="180° indica orientación al Sur")
         
-    with st.sidebar.expander("4. Configuración de Arreglo (Sombreado)", expanded=True):
+    with st.sidebar.expander("4. Configuración de Arreglo (Sombreado)", expanded=False):
         distancia_filas = st.number_input("Distancia entre filas (m)", value=1.15, step=0.1)
         longitud_panel = st.number_input("Longitud física del panel (m)", value=1.134, step=0.1)
         num_filas = st.number_input("Número de filas", value=9, step=1)
 
-    with st.sidebar.expander("5. Perfil de Demanda Planta", expanded=True):
+    with st.sidebar.expander("5. Perfil de Demanda Planta", expanded=False):
         demanda_maxima = st.number_input("Demanda máxima (kW)", value=80, step=5)
         factor_planta = st.slider("Factor de carga", min_value=0.00, max_value=1.00, value=0.60, step=0.01)
         
-    with st.sidebar.expander("6. Parámetros Económicos", expanded=True):
+    with st.sidebar.expander("6. Parámetros Económicos", expanded=False):
         precio_kwh = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0, value=2.82, step=0.01, format="%.2f")
         tipo_moneda = st.selectbox("Divisa", ["MXN ($)", "USD ($)"], index=0)
 
@@ -284,8 +295,8 @@ if not df_filtrado.empty:
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Generacion_Con_Sombra_kW'],
         mode='lines', name='Generación Solar FV (kW)',
-        line=dict(color='#636EFA', width=2.5),
-        fill='tozeroy', fillcolor='rgba(99, 110, 250, 0.15)'
+        line=dict(color='#F59E0B', width=2.5),
+        fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.15)'
     ))
 
     fig.update_layout(
@@ -385,8 +396,8 @@ if not df_filtrado_avanzado.empty:
         fig_avanzada.add_trace(go.Scatter(
             x=df_filtrado_avanzado['Fecha_Hora'], y=df_filtrado_avanzado['Generacion_Con_Sombra_kW'],
             mode='lines', name='Generación Real (Con Sombra)',
-            line=dict(color='#636EFA', width=2.5),
-            fill='tozeroy', fillcolor='rgba(99, 110, 250, 0.1)'
+            line=dict(color='#F59E0B', width=2.5),
+            fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.1)'
         ))
         fig_avanzada.update_layout(xaxis_title="Fecha y Hora", yaxis_title="Potencia Eléctrica (kW)")
 
