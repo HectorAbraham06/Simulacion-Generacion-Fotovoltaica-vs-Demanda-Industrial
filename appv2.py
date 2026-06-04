@@ -9,18 +9,6 @@ from timezonefinder import TimezoneFinder
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
 
-st.markdown("""
-<style>
-[data-testid="metric-container"],
-div.css-1r6slb0, div.css-12w0qpk, div.css-1xarl3l {
-    background-color: rgba(245, 158, 11, 0.07);
-    border-left: 4px solid #F59E0B;
-    border-radius: 6px;
-    padding: 12px 16px;
-}
-</style>
-""", unsafe_allow_html=True)
-
 st.header("Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial")
 st.caption("Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.")
 
@@ -130,6 +118,14 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, ti
     energia_kwh = potencia_con_sombra_kw * (15 / 60)
     
     return poa_original, potencia_con_sombra_kw, potencia_sin_sombra_kw, sombra_total_arreglo, energia_kwh
+
+def render_kpi(col, label, value):
+    col.markdown(f"""
+<div style="background:rgba(245,158,11,0.07);border-left:4px solid #F59E0B;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">{label}</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{value}</div>
+</div>""", unsafe_allow_html=True)
 
 def obtener_zona_horaria(lat, lon):
     tf = TimezoneFinder()
@@ -260,10 +256,10 @@ resumen = st.session_state.resumen
 
 st.subheader("⚡ Resumen del Sistema")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Energía Solar Anual", f"{resumen['energia_fv_anual']:,.1f} kWh")
-col2.metric("Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
-col3.metric("Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
-col4.metric("Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
+render_kpi(col1, "Energía Solar Anual", f"{resumen['energia_fv_anual']:,.1f} kWh")
+render_kpi(col2, "Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
+render_kpi(col3, "Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
+render_kpi(col4, "Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
 
 st.markdown("---")
 
