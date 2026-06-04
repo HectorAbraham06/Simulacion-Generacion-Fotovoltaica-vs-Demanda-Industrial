@@ -107,9 +107,9 @@ def obtener_zona_horaria(lat, lon):
 st.sidebar.header("🛠️ Configuración de Parámetros")
 
 with st.sidebar.expander("1. Geolocalización", expanded=True):
-    latitud = st.number_input("Latitud (°)", value=40.0, step=0.1, format="%.4f")
-    longitud = st.number_input("Longitud (°)", value=-100.0, step=0.1, format="%.4f")
-    altitud = st.number_input("Altitud (msnm)", value=500, step=10)
+    latitud = st.number_input("Latitud (°)", value=19.4791, step=0.1, format="%.4f")
+    longitud = st.number_input("Longitud (°)", value=-96.9500, step=0.1, format="%.4f")
+    altitud = st.number_input("Altitud (msnm)", value=1,210, step=1)
 
 zona_horaria = obtener_zona_horaria(latitud, longitud)
 
