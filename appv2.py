@@ -569,6 +569,28 @@ balance_label = (f"+{balance_neto:,.0f} kWh excedente"
 render_kpi(col5, "Cobertura Solar de la Demanda", f"{cobertura_pct:.1f}%")
 render_kpi(col6, "Balance Neto Anual",            balance_label)
 
+# --- KPI FILA 3: Impacto térmico (modelo Faiman + ERA5) ---
+st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
+col7, col8 = st.columns(2)
+temp_celda_media   = df_analisis['Temp_Celda_C'].mean()
+perdida_termica_pct = abs(coef_temp) * max(0.0, temp_celda_media - 25) * 100
+col7.markdown(f"""
+<div style="background:rgba(239,68,68,0.07);border-left:4px solid #EF4444;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Temperatura Media de Celda</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{temp_celda_media:.1f} °C</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">Modelo Faiman · datos reales ERA5</div>
+</div>""", unsafe_allow_html=True)
+col8.markdown(f"""
+<div style="background:rgba(239,68,68,0.07);border-left:4px solid #EF4444;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Pérdida Estimada por Temperatura</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#dc2626;">{perdida_termica_pct:.1f}%</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">
+        coef. {coef_temp*100:.2f} %/°C · ΔT = {max(0.0, temp_celda_media-25):.1f} °C sobre STC
+    </div>
+</div>""", unsafe_allow_html=True)
+
 st.markdown("<div style='margin-bottom:2rem;'></div>", unsafe_allow_html=True)
 
 # --- MÓDULO EXPRESS (condicional, reactivo) ---
@@ -1085,6 +1107,7 @@ opcion_grafica = st.selectbox(
     [
         "Comparativa: Generación Con Sombra vs. Sin Sombra",
         "Pérdidas: Fracción de Sombra Total del Arreglo",
+        "Térmica: Temperatura de Celda en el Tiempo",
         "Financiero: Ahorro Económico Mensualizado",
         "Recurso Solar: Matriz de Irradiancia Promedio Horaria"
     ]
@@ -1093,6 +1116,7 @@ opcion_grafica = st.selectbox(
 _opciones_con_filtro = [
     "Comparativa: Generación Con Sombra vs. Sin Sombra",
     "Pérdidas: Fracción de Sombra Total del Arreglo",
+    "Térmica: Temperatura de Celda en el Tiempo",
 ]
 if opcion_grafica in _opciones_con_filtro:
     st.caption("Se aplica el rango de fechas seleccionado en la sección anterior.")
@@ -1133,6 +1157,30 @@ if not df_filtrado_avanzado.empty:
             xaxis_title="Fecha y Hora",
             yaxis_title="Porcentaje de Sombra (%)",
             yaxis=dict(range=[0, 105])
+        )
+
+    elif opcion_grafica == "Térmica: Temperatura de Celda en el Tiempo":
+        fig_avanzada.add_trace(go.Scatter(
+            x=df_filtrado_avanzado['Fecha_Hora'],
+            y=df_filtrado_avanzado['Temp_Celda_C'],
+            mode='lines',
+            name='Temperatura de Celda (°C)',
+            line=dict(color='#EF4444', width=1.5),
+            fill='tozeroy',
+            fillcolor='rgba(239,68,68,0.08)'
+        ))
+        fig_avanzada.add_hline(
+            y=25, line_dash='dash', line_color='#94a3b8', line_width=1.2,
+            annotation_text='STC (25 °C)', annotation_position='top right'
+        )
+        fig_avanzada.add_hline(
+            y=temp_celda_media, line_dash='dot', line_color='#dc2626', line_width=1.2,
+            annotation_text=f'Media: {temp_celda_media:.1f} °C', annotation_position='bottom right'
+        )
+        fig_avanzada.update_layout(
+            xaxis_title="Fecha y Hora",
+            yaxis_title="Temperatura de Celda (°C)",
+            yaxis=dict(range=[0, max(df_filtrado_avanzado['Temp_Celda_C'].max() + 5, 60)])
         )
 
     elif opcion_grafica == "Financiero: Ahorro Económico Mensualizado":
