@@ -5,6 +5,10 @@ import pvlib
 from pvlib import shading
 import plotly.graph_objects as go
 from timezonefinder import TimezoneFinder
+import cdsapi
+import xarray as xr
+import os
+import zipfile
 
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
@@ -170,8 +174,65 @@ def generar_demanda_historica_streger(tiempos):
     return demanda_kw, demanda_kwh
 
 
+@st.cache_data(show_spinner=False)
+def obtener_datos_clima_era5(lat: float, lon: float, year: int = 2023):
+    """
+    Descarga temperatura ambiente (2 m) y velocidad de viento (10 m) de ERA5
+    para un año completo. El archivo .nc se guarda localmente para no repetir
+    la descarga. Año fijo 2023: garantiza disponibilidad completa en ERA5.
+    """
+    nc_filename  = f"era5_clima_{lat:.2f}_{lon:.2f}_{year}.nc"
+    zip_filename = f"era5_clima_{lat:.2f}_{lon:.2f}_{year}.zip"
+
+    if not os.path.exists(nc_filename):
+        status = st.status("☁️ Descargando datos climáticos ERA5...", expanded=True)
+        status.write("Conectando con el servidor de Copernicus CDS...")
+
+        request = {
+            "variable": [
+                "2m_temperature",
+                "10m_u_component_of_wind",
+                "10m_v_component_of_wind",
+            ],
+            "location": {"longitude": lon, "latitude": lat},
+            "date": [f"{year}-01-01/{year}-12-31"],
+            "data_format": "netcdf"
+        }
+
+        CDS_URL = "https://cds.climate.copernicus.eu/api"
+        CDS_KEY = "23fa21b2-6d1d-457e-b307-683368fcaefe"
+        cliente = cdsapi.Client(url=CDS_URL, key=CDS_KEY, quiet=True)
+
+        status.write("Solicitud enviada. Esperando respuesta (puede tardar varios minutos)...")
+        cliente.retrieve("reanalysis-era5-single-levels-timeseries", request, zip_filename)
+        status.write("Descarga completada. Procesando archivo...")
+
+        if zipfile.is_zipfile(zip_filename):
+            with zipfile.ZipFile(zip_filename, 'r') as zip_ref:
+                extracted = zip_ref.namelist()
+                if not extracted:
+                    raise ValueError("El ZIP descargado de ERA5 está vacío.")
+                zip_ref.extractall(".")
+                os.rename(extracted[0], nc_filename)
+            os.remove(zip_filename)
+        else:
+            os.rename(zip_filename, nc_filename)
+
+        status.update(label="✅ Datos ERA5 listos.", state="complete", expanded=False)
+
+    ds = xr.open_dataset(nc_filename, engine="netcdf4")
+    if 'time' in ds.dims and 'valid_time' not in ds.dims:
+        ds = ds.rename({'time': 'valid_time'})
+
+    temp_c = ds['t2m'] - 273.15
+    viento = np.sqrt(ds['u10'] ** 2 + ds['v10'] ** 2)
+
+    return temp_c, viento, ds['valid_time'].values
+
+
 def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef,
-                       n_paneles, tiempos, distancia_filas, longitud_panel, num_filas):
+                       n_paneles, tiempos, distancia_filas, longitud_panel, num_filas,
+                       coef_temp=-0.0035):
     """
     Pipeline de generación FV con sombreado por filas.
     Usa pvlib.location.Location para cálculo correcto de masa de aire y clearsky.
@@ -191,6 +252,30 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef,
     )
 
     poa_original = irradiance_total['poa_global']
+
+    # --- Modelo térmico: temperatura de celda via Faiman (ERA5) ---
+    temp_c, viento_ds, tiempos_era5 = obtener_datos_clima_era5(lat, lon, year=2023)
+
+    # Mapear tiempos de simulación (cualquier año) al año ERA5 para la interpolación
+    tiempos_naive  = tiempos.tz_localize(None)
+    tiempos_mapped = tiempos_naive.map(lambda t: t.replace(year=2023))
+
+    climate_ds = xr.Dataset({'temp_c': temp_c, 'viento': viento_ds}).interp(
+        valid_time=tiempos_mapped, method='linear'
+    )
+    temp_ambiente = climate_ds['temp_c'].ffill(dim='valid_time').bfill(dim='valid_time').values
+    vel_viento    = climate_ds['viento'].ffill(dim='valid_time').bfill(dim='valid_time').values
+
+    temp_celda = pvlib.temperature.faiman(
+        poa_global=poa_original.values,
+        temp_air=temp_ambiente,
+        wind_speed=vel_viento
+    )
+
+    # Eficiencia real degradada por temperatura (STC = 25 °C)
+    eficiencia_real = np.clip(ef * (1 + coef_temp * (temp_celda - 25)), 0, 1)
+
+    # --- Sombreado inter-filas ---
     altura_panel = longitud_panel * np.sin(np.radians(tilt))
 
     shaded_frac_por_fila = pvlib.shading.shaded_fraction1d(
@@ -207,11 +292,13 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef,
 
     sombra_total_arreglo   = ((num_filas - 1) * shaded_frac_por_fila) / num_filas
     poa_con_sombra         = poa_original * (1 - sombra_total_arreglo)
-    potencia_sin_sombra_kw = (poa_original  * area * ef * n_paneles) / 1000
-    potencia_con_sombra_kw = (poa_con_sombra * area * ef * n_paneles) / 1000
+
+    # Potencia con eficiencia degradada térmicamente
+    potencia_sin_sombra_kw = (poa_original  * area * eficiencia_real * n_paneles) / 1000
+    potencia_con_sombra_kw = (poa_con_sombra * area * eficiencia_real * n_paneles) / 1000
     energia_kwh            = potencia_con_sombra_kw * (15 / 60)
 
-    return poa_original, potencia_con_sombra_kw, potencia_sin_sombra_kw, sombra_total_arreglo, energia_kwh
+    return poa_original, potencia_con_sombra_kw, potencia_sin_sombra_kw, sombra_total_arreglo, energia_kwh, temp_celda
 
 
 def render_kpi(col, label, value):
@@ -334,8 +421,13 @@ with st.sidebar.form(key="formulario_parametros"):
 
     with st.sidebar.expander("3. Especificaciones de Paneles", expanded=True):
         potencia_w       = st.number_input("Potencia de un panel (W)", value=425, step=5)
-        eficiencia       = st.slider("Eficiencia del panel (%)", min_value=10.0, max_value=30.0,
+        eficiencia       = st.slider("Eficiencia STC del panel (%)", min_value=10.0, max_value=30.0,
                                      value=21.8, step=0.1) / 100.0
+        coef_temp        = st.number_input(
+            "Coeficiente de temperatura (%/°C)",
+            value=-0.35, step=0.01, format="%.2f",
+            help="Pérdida de eficiencia por grado sobre 25 °C (STC). Típico: −0.35 %/°C para silicio monocristalino."
+        ) / 100.0
         area_panel       = st.number_input("Área del panel (m²)", value=1.95, step=0.1)
         cantidad_paneles = st.number_input("Número total de paneles", min_value=1, value=216, step=10)
 
@@ -379,11 +471,16 @@ if ejecutar_simulacion or st.session_state.df_resultados is None:
             tz=zona_horaria
         )
 
-        poa, pot_fv_kw, pot_sin_sombra_kw, frac_sombra, env_fv_kwh = simular_sistema_fv(
-            latitud, longitud, altitud, zona_horaria, inclinacion, azimut,
-            area_panel, eficiencia, cantidad_paneles, tiempos,
-            distancia_filas, longitud_panel, num_filas
-        )
+        try:
+            poa, pot_fv_kw, pot_sin_sombra_kw, frac_sombra, env_fv_kwh, temp_celda = simular_sistema_fv(
+                latitud, longitud, altitud, zona_horaria, inclinacion, azimut,
+                area_panel, eficiencia, cantidad_paneles, tiempos,
+                distancia_filas, longitud_panel, num_filas, coef_temp
+            )
+        except Exception as e:
+            st.error(f"Error durante la descarga o procesamiento de datos climáticos ERA5: {e}")
+            st.info("Revisa la clave CDS configurada o la conexión a internet e intenta de nuevo.")
+            st.stop()
 
         # Modo de demanda: sintético o histórico STREGER
         if modo_demanda == "Histórico STREGER":
@@ -396,6 +493,7 @@ if ejecutar_simulacion or st.session_state.df_resultados is None:
             'Demanda_kW':               dem_kw,
             'Demanda_kWh':              dem_kwh,
             'POA_Original_W_m2':        poa,
+            'Temp_Celda_C':             temp_celda,
             'Generacion_Con_Sombra_kW': pot_fv_kw,
             'Generacion_Sin_Sombra_kW': pot_sin_sombra_kw,
             'Fraccion_Sombra_Arreglo':  frac_sombra,

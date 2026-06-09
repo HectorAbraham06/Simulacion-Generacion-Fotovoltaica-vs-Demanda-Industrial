@@ -4,3 +4,7 @@ pandas
 pvlib
 plotly
 timezonefinder
+cdsapi
+xarray
+netcdf4
+scipy
