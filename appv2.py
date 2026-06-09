@@ -9,74 +9,177 @@ from timezonefinder import TimezoneFinder
 # Configuración de página de Streamlit
 st.set_page_config(page_title="Motor Fotovoltaico & Demanda Industrial", layout="wide")
 
-st.title("Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial")
-st.markdown("Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.")
+st.markdown("""
+<style>
+[data-testid="stHeaderActionElements"] { display: none; }
+</style>
+<div style="margin-bottom:1.5rem;">
+    <h2 style="margin-bottom:0.4rem;font-weight:700;">
+        Motor de Jensen: Simulación Fotovoltaica vs. Demanda Industrial
+    </h2>
+    <p style="color:#64748b;font-size:0.9rem;margin:0;">
+        Herramienta interactiva para dimensionamiento de sistemas FV y análisis de cobertura de carga quinceminutal anual.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+# =============================================================================
+# CONSTANTES — DATOS HISTÓRICOS REALES STREGER S.A.
+# =============================================================================
+
+# kWh mensuales reales extraídos del recibo CFE (mayo 2025 – mayo 2026)
+# MAY usa el promedio de MAY-25 (11,040) y MAY-26 (9,520)
+STREGER_KWH_MENSUAL = {
+    1:  5_280,   # ENE 26
+    2:  8_400,   # FEB 26
+    3:  7_600,   # MAR 26
+    4:  8_800,   # ABR 26
+    5: 10_280,   # MAY — promedio MAY-25 / MAY-26
+    6: 10_240,   # JUN 25
+    7:  8_080,   # JUL 25
+    8:  8_960,   # AGO 25
+    9: 10_560,   # SEP 25
+    10: 10_240,  # OCT 25
+    11:  6_400,  # NOV 25
+    12:  7_840,  # DIC 25
+}
+
+STREGER_DEMANDA_MAX_KW = 80   # 1 unidad medida × multiplicador 80
+STREGER_PRECIO_MEDIO   = 2.67 # $/kWh histórico (sin IVA), del análisis del recibo
 
 # =============================================================================
 # FUNCIONES DE SIMULACIÓN (BACKEND)
 # =============================================================================
+
+def calcular_tilt_optimo(lat):
+    """Ángulo óptimo de inclinación ≈ latitud absoluta del lugar."""
+    return int(round(abs(lat)))
+
+
+@st.cache_data
+def calcular_seccion1(lat, lon, alt, tz, tilt, azimut):
+    """
+    Calcula irradiancia GHI/DNI/DHI y POA para un día típico (21 Jun),
+    más estimación rápida de producción de un panel estándar.
+    """
+    location    = pvlib.location.Location(lat, lon, tz=tz, altitude=alt)
+    tiempos_dia = pd.date_range(
+        start='2026-06-21 00:00',
+        end='2026-06-21 23:45',
+        freq='15min',
+        tz=tz
+    )
+    sol_dia      = location.get_solarposition(tiempos_dia)
+    clearsky_dia = location.get_clearsky(tiempos_dia, model='ineichen')
+
+    poa_dia = pvlib.irradiance.get_total_irradiance(
+        surface_tilt=tilt,
+        surface_azimuth=azimut,
+        solar_zenith=sol_dia['apparent_zenith'],
+        solar_azimuth=sol_dia['azimuth'],
+        dni=clearsky_dia['dni'],
+        ghi=clearsky_dia['ghi'],
+        dhi=clearsky_dia['dhi']
+    )['poa_global']
+
+    AREA_DEFAULT = 1.95
+    EF_DEFAULT   = 0.218
+    kwh_1panel   = float((poa_dia * AREA_DEFAULT * EF_DEFAULT / 1000 * (15 / 60)).sum())
+
+    return tiempos_dia, clearsky_dia, poa_dia, kwh_1panel
+
 
 def generar_demanda_industrial(demanda_max, factor_planta, tiempos):
     """
     Genera una curva de carga sintética anual cada 15 minutos (35,040 periodos)
     diferenciando Verano, No Verano y Fines de Semana.
     """
-    # Extraer características temporales a partir de la serie con zona horaria
-    mes = tiempos.month
-    dia_semana = tiempos.weekday # 5: Sábado, 6: Domingo
-    hora = tiempos.hour + tiempos.minute / 60.0
-    
-    # Inicializar arreglo base de demanda
+    mes        = tiempos.month
+    dia_semana = tiempos.weekday
+    hora       = tiempos.hour + tiempos.minute / 60.0
+
     perfil_base = np.zeros(len(tiempos))
-    
-    # Definición de comportamientos típicos de planta industrial
+
     for i, (h, m, ds) in enumerate(zip(hora, mes, dia_semana)):
-        # Determinar estacionalidad (Verano: Mayo a Septiembre)
-        es_verano = 5 <= m <= 9
+        es_verano     = 5 <= m <= 9
         es_fin_semana = ds >= 5
-        
-        # Perfil diario base (Turnos de trabajo de la planta: pico 8:00 a 18:00)
+
         if not es_fin_semana:
-            # Perfil de día operativo habitual
-            carga_hora = 0.4 + 0.5 * np.exp(-((h - 13)**2) / 24) # Valle en la noche, meseta en el día
+            carga_hora = 0.4 + 0.5 * np.exp(-((h - 13) ** 2) / 24)
         else:
-            # Fin de semana (operación mínima de mantenimiento)
             carga_hora = 0.2 + 0.1 * np.sin(2 * np.pi * h / 24)
-            
-        # Modificador por estacionalidad (mayor aire acondicionado/procesos en verano)
+
         if es_verano and not es_fin_semana:
-            carga_hora *= 1.25 
-            
+            carga_hora *= 1.25
+
         perfil_base[i] = carga_hora
 
-    # Normalizar y ajustar al Factor de Planta solicitado
     promedio_actual = np.mean(perfil_base)
     if promedio_actual > 0:
         perfil_base = perfil_base * (factor_planta / promedio_actual)
-        
-    # Forzar que el pico absoluto coincida con la Demanda Máxima
+
     perfil_base = (perfil_base / np.max(perfil_base)) * demanda_max
-    
-    # Ruido aleatorio realista del comportamiento industrial (±5%)
-    ruido = np.random.normal(0, 0.05, len(tiempos))
-    demanda_kw = np.clip(perfil_base + (perfil_base * ruido), 0, demanda_max)
-    
-    # Cálculo de Energía quinceminutal (kW * 15/60 hrs)
+
+    np.random.seed(42)
+    ruido       = np.random.normal(0, 0.05, len(tiempos))
+    demanda_kw  = np.clip(perfil_base + (perfil_base * ruido), 0, demanda_max)
     demanda_kwh = demanda_kw * (15 / 60)
-    
+
     return demanda_kw, demanda_kwh
 
 
-def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, tiempos, distancia_filas, longitud_panel, num_filas):
-    sol = pvlib.solarposition.get_solarposition(tiempos, lat, lon)
-    
-    clearsky = pvlib.clearsky.ineichen(
-        sol['apparent_zenith'],
-        airmass_absolute=1.5,
-        linke_turbidity=3,
-        altitude=alt
-    )
-    
+def generar_demanda_historica_streger(tiempos):
+    """
+    Genera la curva de demanda escalando el perfil sintético diario
+    para que el total kWh de cada mes coincida con los datos reales del
+    recibo CFE de STREGER S.A. (mayo 2025 – mayo 2026).
+    Demanda máxima limitada a 80 kW (real = 1 unidad × multiplicador 80).
+    """
+    mes        = tiempos.month
+    dia_semana = tiempos.weekday
+    hora       = tiempos.hour + tiempos.minute / 60.0
+
+    # Perfil diario base (forma gaussiana de turno industrial)
+    perfil_base = np.zeros(len(tiempos))
+    for i, (h, ds) in enumerate(zip(hora, dia_semana)):
+        if ds < 5:
+            perfil_base[i] = 0.4 + 0.5 * np.exp(-((h - 13) ** 2) / 24)
+        else:
+            perfil_base[i] = 0.2 + 0.1 * np.sin(2 * np.pi * h / 24)
+
+    demanda_kw = np.zeros(len(tiempos))
+
+    for m_num in range(1, 13):
+        mask        = (mes == m_num)
+        perfil_mes  = perfil_base[mask]
+        if perfil_mes.sum() == 0:
+            continue
+
+        target_kwh   = STREGER_KWH_MENSUAL[m_num]
+        current_kwh  = perfil_mes.sum() * (15 / 60)
+        scale_factor = target_kwh / current_kwh
+
+        scaled = np.clip(perfil_mes * scale_factor, 0, STREGER_DEMANDA_MAX_KW)
+        demanda_kw[mask] = scaled
+
+    np.random.seed(42)
+    ruido       = np.random.normal(0, 0.03, len(tiempos))
+    demanda_kw  = np.clip(demanda_kw * (1 + ruido), 0, STREGER_DEMANDA_MAX_KW)
+    demanda_kwh = demanda_kw * (15 / 60)
+
+    return demanda_kw, demanda_kwh
+
+
+def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef,
+                       n_paneles, tiempos, distancia_filas, longitud_panel, num_filas):
+    """
+    Pipeline de generación FV con sombreado por filas.
+    Usa pvlib.location.Location para cálculo correcto de masa de aire y clearsky.
+    """
+    location = pvlib.location.Location(lat, lon, tz=tz, altitude=alt)
+    sol      = location.get_solarposition(tiempos)
+    clearsky = location.get_clearsky(tiempos, model='ineichen')
+
     irradiance_total = pvlib.irradiance.get_total_irradiance(
         surface_tilt=tilt,
         surface_azimuth=azimuth,
@@ -86,252 +189,353 @@ def simular_sistema_fv(lat, lon, alt, tz, tilt, azimuth, area, ef, n_paneles, ti
         ghi=clearsky['ghi'],
         dhi=clearsky['dhi']
     )
-    
+
     poa_original = irradiance_total['poa_global']
-    
     altura_panel = longitud_panel * np.sin(np.radians(tilt))
-    
-    # 1. Calcular sombreado 1D por fila
+
     shaded_frac_por_fila = pvlib.shading.shaded_fraction1d(
         solar_zenith=sol['apparent_zenith'],
         solar_azimuth=sol['azimuth'],
-        axis_azimuth=azimuth - 90,          # Eje longitudinal de las filas (Este-Oeste)
-        shaded_row_rotation=tilt,           # En arreglos fijos, la rotación es el Tilt
-        collector_width=altura_panel,       # Longitud inclinada del panel (m)
-        pitch=distancia_filas,              # Separación entre filas (m)
-        axis_tilt=0,                        # Terreno plano
-        surface_to_axis_offset=0,           # Sin desfase de tubo de torque
-        cross_axis_slope=0                  # Terreno sin pendiente lateral
+        axis_azimuth=azimuth - 90,
+        shaded_row_rotation=tilt,
+        collector_width=altura_panel,
+        pitch=distancia_filas,
+        axis_tilt=0,
+        surface_to_axis_offset=0,
+        cross_axis_slope=0
     )
-    
-    # 2. Promedio del arreglo considerando la primera fila libre de sombras
-    sombra_total_arreglo = ((num_filas - 1) * shaded_frac_por_fila) / num_filas
-    
-    # 3. Aplicar pérdidas por sombra al POA
-    poa_con_sombra = poa_original * (1 - sombra_total_arreglo)
-    
-    # 4. Calcular ambas potencias (en kW)
-    potencia_sin_sombra_kw = (poa_original * area * ef * n_paneles) / 1000
+
+    sombra_total_arreglo   = ((num_filas - 1) * shaded_frac_por_fila) / num_filas
+    poa_con_sombra         = poa_original * (1 - sombra_total_arreglo)
+    potencia_sin_sombra_kw = (poa_original  * area * ef * n_paneles) / 1000
     potencia_con_sombra_kw = (poa_con_sombra * area * ef * n_paneles) / 1000
-    
-    # Energías quinceminutales (usamos la que tiene sombras como la real oficial)
-    energia_kwh = potencia_con_sombra_kw * (15 / 60)
-    
+    energia_kwh            = potencia_con_sombra_kw * (15 / 60)
+
     return poa_original, potencia_con_sombra_kw, potencia_sin_sombra_kw, sombra_total_arreglo, energia_kwh
 
+
+def render_kpi(col, label, value):
+    col.markdown(f"""
+<div style="background:rgba(245,158,11,0.07);border-left:4px solid #F59E0B;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">{label}</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{value}</div>
+</div>""", unsafe_allow_html=True)
+
+
 def obtener_zona_horaria(lat, lon):
-    tf = TimezoneFinder()
+    tf   = TimezoneFinder()
     zona = tf.timezone_at(lng=lon, lat=lat)
     return zona if zona else 'UTC'
 
-# =============================================================================
-# INTERFAZ DE USUARIO (STREAMLIT SIDEBAR)
-# =============================================================================
 
+# =============================================================================
+# SIDEBAR — SECCIÓN 1: INPUTS REACTIVOS (FUERA DEL FORM)
+# =============================================================================
 st.sidebar.header("🛠️ Configuración de Parámetros")
 
+with st.sidebar.expander("1. Geolocalización", expanded=True):
+    latitud  = st.number_input("Latitud (°)",    value=19.4791,  step=0.1,  format="%.4f")
+    longitud = st.number_input("Longitud (°)",   value=-96.9500, step=0.1,  format="%.4f")
+    altitud  = st.number_input("Altitud (msnm)", value=1210,     step=1)
+
+zona_horaria = obtener_zona_horaria(latitud, longitud)
+tilt_optimo  = calcular_tilt_optimo(latitud)
+
+with st.sidebar.expander("2. Geometría de Instalación", expanded=True):
+    st.caption(f"Ángulo óptimo estimado para lat. {latitud:.2f}°: **{tilt_optimo}°**")
+    inclinacion = st.slider("Inclinación / Tilt (°)",   min_value=0, max_value=90,  value=tilt_optimo)
+    azimut      = st.slider("Orientación / Azimut (°)", min_value=0, max_value=360, value=180,
+                            help="180° indica orientación al Sur")
+
+# Modo de demanda — fuera del form para que sea reactivo y afecte la sección 5
+st.sidebar.markdown("---")
+modo_demanda = st.sidebar.radio(
+    "Fuente de datos de demanda:",
+    ["Sintético", "Histórico STREGER"],
+    index=0,
+    help="'Histórico STREGER' usa los kWh reales del recibo CFE (mayo 2025 – mayo 2026)."
+)
+
+# =============================================================================
+# SECCIÓN 1: DIAGNÓSTICO CLIMÁTICO (SIEMPRE VISIBLE, REACTIVO)
+# =============================================================================
+st.markdown("""
+<div style="border-left:5px solid #F59E0B; padding:0.5rem 1rem;
+            background:rgba(245,158,11,0.05); border-radius:0 6px 6px 0; margin-bottom:1.2rem;">
+    <span style="font-size:0.7rem;font-weight:600;color:#92400E;text-transform:uppercase;letter-spacing:0.06em;">
+        Siempre Visible
+    </span>
+    <h3 style="margin:0.15rem 0 0 0;color:#1E293B;font-size:1.15rem;">
+        Sección 1 — Diagnóstico Climático
+    </h3>
+    <p style="color:#64748b;font-size:0.82rem;margin:0.25rem 0 0 0;">
+        Recurso solar para la ubicación seleccionada. Se actualiza instantáneamente al cambiar
+        coordenadas, inclinación u orientación. No requiere iniciar la simulación completa.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+tiempos_dia, clearsky_dia, poa_dia, kwh_1panel = calcular_seccion1(
+    latitud, longitud, altitud, zona_horaria, inclinacion, azimut
+)
+
+col_s1a, col_s1b, col_s1c = st.columns(3)
+render_kpi(col_s1a, "Ángulo óptimo para esta latitud",        f"{tilt_optimo}°")
+render_kpi(col_s1b, "Producción est. 1 panel (día típico)",   f"{kwh_1panel:.3f} kWh/día")
+render_kpi(col_s1c, "Irradiancia pico estimada (día típico)", f"{int(poa_dia.max())} W/m²")
+
+st.markdown("<div style='margin-top:1.2rem;'></div>", unsafe_allow_html=True)
+
+fig_s1 = go.Figure()
+fig_s1.add_trace(go.Scatter(
+    x=tiempos_dia, y=clearsky_dia['ghi'],
+    name='GHI — Global Horizontal', mode='lines',
+    line=dict(color='#F59E0B', width=2)
+))
+fig_s1.add_trace(go.Scatter(
+    x=tiempos_dia, y=clearsky_dia['dni'],
+    name='DNI — Directa Normal', mode='lines',
+    line=dict(color='#EF4444', width=2)
+))
+fig_s1.add_trace(go.Scatter(
+    x=tiempos_dia, y=clearsky_dia['dhi'],
+    name='DHI — Difusa Horizontal', mode='lines',
+    line=dict(color='#3B82F6', width=2)
+))
+fig_s1.add_trace(go.Scatter(
+    x=tiempos_dia, y=poa_dia,
+    name=f'POA — Plano del Arreglo ({inclinacion}°, Az {azimut}°)', mode='lines',
+    line=dict(color='#10B981', width=2.5, dash='dash')
+))
+fig_s1.update_layout(
+    title=dict(
+        text="Componentes de Irradiancia Solar — Día Típico (21 Jun 2026, Solsticio de Verano)",
+        font=dict(size=13)
+    ),
+    xaxis_title="Hora del día",
+    yaxis_title="Irradiancia (W/m²)",
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=20, r=20, t=60, b=20),
+    height=380
+)
+st.plotly_chart(fig_s1, use_container_width=True)
+
+# Separador visual entre Sección 1 y simulación completa
+st.markdown("<hr style='border:none;border-top:2px solid #e2e8f0;margin:2rem 0;'>", unsafe_allow_html=True)
+
+# =============================================================================
+# SIDEBAR — SIMULACIÓN COMPLETA (DENTRO DEL FORM)
+# =============================================================================
+st.sidebar.markdown("---")
+
 with st.sidebar.form(key="formulario_parametros"):
-    
-    with st.sidebar.expander("1. Geolocalización", expanded=True):
-        latitud = st.number_input("Latitud (°)", value=19.4791, step=0.1, format="%.4f")
-        longitud = st.number_input("Longitud (°)", value=-96.9500, step=0.1, format="%.4f")
-        altitud = st.number_input("Altitud (msnm)", value=1210, step=1)
 
-    zona_horaria = obtener_zona_horaria(latitud, longitud)
-
-    with st.sidebar.expander("2. Especificaciones de Paneles", expanded=True):
-        potencia_w = st.number_input("Potencia de un panel (W)", value=425, step=5)
-        eficiencia = st.slider("Eficiencia del panel (%)", min_value=10.0, max_value=30.0, value=21.8, step=0.1) / 100.0
-        area_panel = st.number_input("Área del panel (m²)", value=1.95, step=0.1)
+    with st.sidebar.expander("3. Especificaciones de Paneles", expanded=True):
+        potencia_w       = st.number_input("Potencia de un panel (W)", value=425, step=5)
+        eficiencia       = st.slider("Eficiencia del panel (%)", min_value=10.0, max_value=30.0,
+                                     value=21.8, step=0.1) / 100.0
+        area_panel       = st.number_input("Área del panel (m²)", value=1.95, step=0.1)
         cantidad_paneles = st.number_input("Número total de paneles", min_value=1, value=216, step=10)
 
-    with st.sidebar.expander("3. Geometría de Instalación", expanded=True):
-        inclinacion = st.slider("Inclinación / Tilt (°)", min_value=0, max_value=90, value=25)
-        azimut = st.slider("Orientación / Azimut (°)", min_value=0.00, max_value=360.00, value=164.78, help="180° indica orientación al Sur")
-        
-    with st.sidebar.expander("4. Configuración de Arreglo (Sombreado)", expanded=True):
+    with st.sidebar.expander("4. Configuración de Arreglo (Sombreado)", expanded=False):
         distancia_filas = st.number_input("Distancia entre filas (m)", value=1.15, step=0.1)
-        longitud_panel = st.number_input("Longitud física del panel (m)", value=1.134, step=0.1)
-        num_filas = st.number_input("Número de filas", value=9, step=1)
+        longitud_panel  = st.number_input("Longitud física del panel (m)", value=1.134, step=0.1)
+        num_filas       = st.number_input("Número de filas", value=9, step=1)
 
-    with st.sidebar.expander("5. Perfil de Demanda Planta", expanded=True):
-        demanda_maxima = st.number_input("Demanda máxima (kW)", value=80, step=5)
-        factor_planta = st.slider("Factor de carga", min_value=0.00, max_value=1.00, value=0.60, step=0.01)
-        
-    with st.sidebar.expander("6. Parámetros Económicos", expanded=True):
-        precio_kwh = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0, value=2.82, step=0.01, format="%.2f")
+    with st.sidebar.expander("5. Perfil de Demanda Planta", expanded=False):
+        if modo_demanda == "Histórico STREGER":
+            st.info("Usando datos reales del recibo CFE de STREGER S.A. (mayo 2025 – mayo 2026).")
+            st.caption(f"Demanda máxima real: **{STREGER_DEMANDA_MAX_KW} kW**  |  Consumo anual: **~{sum(STREGER_KWH_MENSUAL.values()):,} kWh**")
+            demanda_maxima = STREGER_DEMANDA_MAX_KW
+            factor_planta  = 0.22
+        else:
+            demanda_maxima = st.number_input("Demanda máxima (kW)", value=80, step=5)
+            factor_planta  = st.slider("Factor de carga", min_value=0.00, max_value=1.00,
+                                       value=0.60, step=0.01)
+
+    with st.sidebar.expander("6. Parámetros Económicos", expanded=False):
+        precio_kwh  = st.number_input("Precio de la energía ($ / kWh)", min_value=0.0,
+                                      value=2.82, step=0.01, format="%.2f")
         tipo_moneda = st.selectbox("Divisa", ["MXN ($)", "USD ($)"], index=0)
 
-    # Botón de ejecución controlado
-    st.sidebar.markdown("---")
     ejecutar_simulacion = st.form_submit_button(label="🚀 Iniciar Simulación", use_container_width=True)
 
-# =============================================================================
-# LOGICA DE CONTROL Y RENDERIZADO
-# =============================================================================
 
-# Inicializar sesión para mantener los datos de visualización estables hasta el siguiente clic
+# =============================================================================
+# LÓGICA DE CONTROL Y RENDERIZADO (SIMULACIÓN COMPLETA)
+# =============================================================================
 if "df_resultados" not in st.session_state:
     st.session_state.df_resultados = None
-    st.session_state.resumen = None
+    st.session_state.resumen       = None
 
 if ejecutar_simulacion or st.session_state.df_resultados is None:
     with st.spinner("Procesando modelos físicos de radiación solar y demanda..."):
-        # Definición del índice temporal anual quinceminutal (35,040 periodos)
         tiempos = pd.date_range(
             start='2026-01-01 00:00',
             end='2026-12-31 23:45',
             freq='15min',
             tz=zona_horaria
         )
-        
-        # Ejecución de los modelos matemáticos
+
         poa, pot_fv_kw, pot_sin_sombra_kw, frac_sombra, env_fv_kwh = simular_sistema_fv(
-            latitud, longitud, altitud, zona_horaria, inclinacion, azimut, 
-            area_panel, eficiencia, cantidad_paneles, tiempos, distancia_filas, longitud_panel, num_filas
+            latitud, longitud, altitud, zona_horaria, inclinacion, azimut,
+            area_panel, eficiencia, cantidad_paneles, tiempos,
+            distancia_filas, longitud_panel, num_filas
         )
-        
-        dem_kw, dem_kwh = generar_demanda_industrial(
-            demanda_maxima, factor_planta, tiempos
-        )
-        
-        # Estructuración de datos finales
+
+        # Modo de demanda: sintético o histórico STREGER
+        if modo_demanda == "Histórico STREGER":
+            dem_kw, dem_kwh = generar_demanda_historica_streger(tiempos)
+        else:
+            dem_kw, dem_kwh = generar_demanda_industrial(demanda_maxima, factor_planta, tiempos)
+
         df = pd.DataFrame({
-            'Fecha_Hora': tiempos,
-            'Demanda_kW': dem_kw,
-            'Demanda_kWh': dem_kwh,
-            'POA_Original_W_m2': poa,
+            'Fecha_Hora':               tiempos,
+            'Demanda_kW':               dem_kw,
+            'Demanda_kWh':              dem_kwh,
+            'POA_Original_W_m2':        poa,
             'Generacion_Con_Sombra_kW': pot_fv_kw,
             'Generacion_Sin_Sombra_kW': pot_sin_sombra_kw,
-            'Fraccion_Sombra_Arreglo': frac_sombra,
-            'Generacion_Energia_kWh': env_fv_kwh,
-            'Excedente_Deficit_kW': pot_fv_kw - dem_kw
+            'Fraccion_Sombra_Arreglo':  frac_sombra,
+            'Generacion_Energia_kWh':   env_fv_kwh,
+            'Excedente_Deficit_kW':     pot_fv_kw - dem_kw
         })
-        
-        # ... (Aquí ya se calculó tu DataFrame 'df' con 'Generacion_Energia_kWh') ...
-        
-        # Cálculo Económico Basado en la Generación Real (Con Sombra)
+
         df['Ahorro_Monetario'] = df['Generacion_Energia_kWh'] * precio_kwh
-        
-        # Extraer mes y año para agrupaciones mensuales utilizando el índice temporal o la columna Fecha_Hora
-        df['Mes'] = df['Fecha_Hora'].dt.strftime('%m - %B')
-        
-        # Resumen Anual Total
-        ahorro_anual_total = df['Ahorro_Monetario'].sum()
+        df['Mes']              = df['Fecha_Hora'].dt.strftime('%m - %B')
+        df['Mes_Num']          = df['Fecha_Hora'].dt.month
+
+        ahorro_anual_total  = df['Ahorro_Monetario'].sum()
         energia_anual_total = df['Generacion_Energia_kWh'].sum()
-        
-        # Agrupación Mensual para el análisis detallado
+
         df_mensual = df.groupby('Mes').agg({
             'Generacion_Energia_kWh': 'sum',
-            'Ahorro_Monetario': 'sum'
+            'Demanda_kWh':            'sum',
+            'Ahorro_Monetario':       'sum'
         }).reset_index()
-        
-        # Guardar en el session_state para que las gráficas lo lean de forma estable
-        
-        st.session_state.energia_anual = energia_anual_total
-        st.session_state.ahorro_anual = ahorro_anual_total
-        st.session_state.df_mensual = df_mensual
-        st.session_state.divisa = tipo_moneda.split(" ")[0]
-        
-        # Guardado en Session State para evitar recargas reactivas automáticas
-        st.session_state.df_resultados = df
-        st.session_state.resumen = {
-            'energia_fv_anual': env_fv_kwh.sum(),
-            'demanda_anual': dem_kwh.sum(),
-            'potencia_pico': pot_fv_kw.max(),
+
+        st.session_state.energia_anual  = energia_anual_total
+        st.session_state.ahorro_anual   = ahorro_anual_total
+        st.session_state.df_mensual     = df_mensual
+        st.session_state.divisa         = tipo_moneda.split(" ")[0]
+        st.session_state.modo_demanda   = modo_demanda
+        st.session_state.df_resultados  = df
+        st.session_state.resumen        = {
+            'energia_fv_anual':    env_fv_kwh.sum(),
+            'demanda_anual':       dem_kwh.sum(),
+            'potencia_pico':       pot_fv_kw.max(),
             'potencia_disponible': cantidad_paneles * potencia_w / 1000
         }
 
 # Recuperación de datos estables
 df_analisis = st.session_state.df_resultados
-resumen = st.session_state.resumen
+resumen     = st.session_state.resumen
+divisa      = st.session_state.get('divisa', 'MXN')
 
-# --- PANELES DE INFORME Y MÉTRICAS CLAVE ---
+# =============================================================================
+# SECCIÓN 2 — BALANCE SOLAR VS. DEMANDA INDUSTRIAL
+# =============================================================================
+st.markdown("""
+<div style="border-left:5px solid #3B82F6; padding:0.5rem 1rem;
+            background:rgba(59,130,246,0.05); border-radius:0 6px 6px 0; margin-bottom:1.2rem;">
+    <span style="font-size:0.7rem;font-weight:600;color:#1E40AF;text-transform:uppercase;letter-spacing:0.06em;">
+        Requiere Simulación
+    </span>
+    <h3 style="margin:0.15rem 0 0 0;color:#1E293B;font-size:1.15rem;">
+        Sección 2 — Balance Solar vs. Demanda Industrial
+    </h3>
+    <p style="color:#64748b;font-size:0.82rem;margin:0.25rem 0 0 0;">
+        Configure los parámetros del sistema en el panel lateral y presione "Iniciar Simulación".
+        Modo activo: <strong>{modo}</strong>
+    </p>
+</div>
+""".format(modo=st.session_state.get('modo_demanda', modo_demanda)), unsafe_allow_html=True)
+
+# --- KPI FILA 1: Métricas del sistema ---
+st.subheader("⚡ Resumen del Sistema")
 col1, col2, col3, col4 = st.columns(4)
-col1.metric("Energía Solar Anual", f"{resumen['energia_fv_anual']:,.1f} kWh")
-col2.metric("Consumo Planta Anual", f"{resumen['demanda_anual']:,.1f} kWh")
-col3.metric("Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
-col4.metric("Generación FV Pico", f"{resumen['potencia_pico']:.2f} kW")
+render_kpi(col1, "Energía Solar Anual",   f"{resumen['energia_fv_anual']:,.1f} kWh")
+render_kpi(col2, "Consumo Planta Anual",  f"{resumen['demanda_anual']:,.1f} kWh")
+render_kpi(col3, "Potencia DC Instalada", f"{resumen['potencia_disponible']:.1f} kWp")
+render_kpi(col4, "Generación FV Pico",    f"{resumen['potencia_pico']:.2f} kW")
 
+# --- KPI FILA 2: Balance de cobertura ---
+st.markdown("<div style='margin-top:0.8rem;'></div>", unsafe_allow_html=True)
+col5, col6 = st.columns(2)
+cobertura_pct = min((resumen['energia_fv_anual'] / resumen['demanda_anual']) * 100, 100.0)
+balance_neto  = resumen['energia_fv_anual'] - resumen['demanda_anual']
+balance_label = (f"+{balance_neto:,.0f} kWh excedente"
+                 if balance_neto >= 0 else f"{balance_neto:,.0f} kWh déficit")
+render_kpi(col5, "Cobertura Solar de la Demanda", f"{cobertura_pct:.1f}%")
+render_kpi(col6, "Balance Neto Anual",            balance_label)
+
+st.markdown("<div style='margin-bottom:2rem;'></div>", unsafe_allow_html=True)
+
+# --- MÓDULO EXPRESS (condicional, reactivo) ---
 st.markdown("---")
+usar_express = st.checkbox(
+    "¿Deseas calcular el impacto económico rápido por precio de kWh? (Módulo Express)",
+    value=False,
+    help="Ingresa tu costo promedio por kWh para ver el gasto antes y después de instalar los paneles."
+)
 
-# =============================================================================
-# NUEVA SECCIÓN: ANÁLISIS ECONÓMICO Y DE AHORROS
-# =============================================================================
-st.subheader("Análisis de Impacto Económico ")
+if usar_express:
+    col_ep, col_er1, col_er2, col_er3 = st.columns([1, 1, 1, 1])
+    with col_ep:
+        precio_express = st.number_input(
+            "Costo promedio kWh ($/kWh)",
+            min_value=0.01,
+            value=STREGER_PRECIO_MEDIO,
+            step=0.01,
+            format="%.2f",
+            help=f"Precio medio histórico de STREGER: ${STREGER_PRECIO_MEDIO}/kWh (sin IVA)"
+        )
 
-# 1. Fila de Métricas Financieras Clave
-col_econ1, col_econ2, col_econ3 = st.columns(3)
+    demanda_kWh_anual = resumen['demanda_anual']
+    gen_kWh_anual     = resumen['energia_fv_anual']
+    neto_kwh          = max(demanda_kWh_anual - gen_kWh_anual, 0)
 
-with col_econ1:
-    st.metric(
-        label="Tarifa Eléctrica Base",
-        value=f"{precio_kwh:.2f} {st.session_state.divisa}/kWh"
-    )
+    costo_actual      = demanda_kWh_anual * precio_express
+    costo_con_paneles = neto_kwh          * precio_express
+    ahorro_express    = costo_actual - costo_con_paneles
 
-with col_econ2:
-    st.metric(
-        label="Ahorro Económico Anual Estimado",
-        value=f"{st.session_state.ahorro_anual:,.2f} {st.session_state.divisa}",
-    )
+    render_kpi(col_er1, f"Gasto energético actual (año)",    f"${costo_actual:,.0f} {divisa}")
+    render_kpi(col_er2, f"Gasto con sistema solar (año)",    f"${costo_con_paneles:,.0f} {divisa}")
+    render_kpi(col_er3, f"Ahorro neto estimado (año)",       f"${ahorro_express:,.0f} {divisa}")
 
-with col_econ3:
-    # Promedio mensual estimado
-    ahorro_promedio_mes = st.session_state.ahorro_anual / 12
-    st.metric(
-        label="Ahorro Mensual Promedio",
-        value=f"{ahorro_promedio_mes:,.2f} {st.session_state.divisa}"
-    )
+st.markdown("<div style='margin-bottom:1.5rem;'></div>", unsafe_allow_html=True)
 
-# 2. Desglose detallado mes a mes en un expansor para no saturar la pantalla
-with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
-    st.markdown("A continuación se muestra el retorno económico mensualizado calculado de forma directa:")
-    
-    # Formatear la tabla para una visualización profesional antes de mostrarla
-    tabla_formateada = st.session_state.df_mensual.copy()
-    tabla_formateada.columns = ['Mes de Simulación', 'Energía Generada (kWh)', f'Ahorro Estimado ({st.session_state.divisa})']
-    
-    st.dataframe(
-        tabla_formateada.style.format({
-            'Energía Generada (kWh)': '{:,.2f}',
-            f'Ahorro Estimado ({st.session_state.divisa})': '${:,.2f}'
-        }),
-        use_container_width=True
-    )
-
-# --- CONTROL DE VISUALIZACIÓN GRÁFICA ---
+# --- GRÁFICA 1: Series temporales (filtro de fechas) ---
 st.subheader("📈 Generación VS. Demanda en el tiempo")
-st.markdown("Filtra un rango de fechas específico para inspeccionar la interacción entre la curva de generación solar y la demanda de la planta.")
-st.markdown("*(La simulación abarca valores de 2026 solamente)*")
-# Control de fecha para el filtro dinámico de la gráfica
+st.caption("Filtra un rango de fechas para inspeccionar la interacción entre generación solar y demanda de la planta. Datos del año 2026.")
+
 col_f1, col_f2 = st.columns(2)
 with col_f1:
     fecha_inicio = st.date_input("Fecha Inicio", value=pd.to_datetime("2026-03-15"))
 with col_f2:
     fecha_fin = st.date_input("Fecha Fin", value=pd.to_datetime("2026-03-21"))
 
-# Aplicar filtro de fecha sobre el DataFrame clonado localmente
 df_analisis['Fecha_Solo'] = df_analisis['Fecha_Hora'].dt.date
-df_filtrado = df_analisis[(df_analisis['Fecha_Solo'] >= fecha_inicio) & (df_analisis['Fecha_Solo'] <= fecha_fin)]
+df_filtrado = df_analisis[
+    (df_analisis['Fecha_Solo'] >= fecha_inicio) &
+    (df_analisis['Fecha_Solo'] <= fecha_fin)
+]
 
 if not df_filtrado.empty:
     fig = go.Figure()
-    
-    # Trazado de Demanda de Carga
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Demanda_kW'],
         mode='lines', name='Demanda Industrial (kW)',
-        line=dict(color='#EF553B', width=2)
+        line=dict(color='#3B82F6', width=2)
     ))
-    
-    # Trazado de Generación Solar
     fig.add_trace(go.Scatter(
         x=df_filtrado['Fecha_Hora'], y=df_filtrado['Generacion_Con_Sombra_kW'],
         mode='lines', name='Generación Solar FV (kW)',
-        line=dict(color='#636EFA', width=2.5),
-        fill='tozeroy', fillcolor='rgba(99, 110, 250, 0.15)'
+        line=dict(color='#F59E0B', width=2.5),
+        fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.15)'
     ))
-
     fig.update_layout(
         xaxis_title="Fecha y Hora",
         yaxis_title="Potencia Eléctrica (kW)",
@@ -339,126 +543,554 @@ if not df_filtrado.empty:
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         margin=dict(l=20, r=20, t=40, b=20)
     )
-    
     st.plotly_chart(fig, use_container_width=True)
 else:
     st.warning("No hay datos disponibles para el rango de fechas seleccionado.")
 
+# --- GRÁFICA 2: Histograma mensual Demanda vs. Generación ---
+st.subheader("📊 Balance Mensual: Demanda vs. Generación Solar")
+st.caption("Comparativa de energía consumida y generada por mes. Permite identificar los meses con mayor y menor cobertura solar.")
 
-st.markdown("---")
+meses_es = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun',
+            7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+
+df_balance = (
+    df_analisis
+    .assign(Mes_Num=df_analisis['Fecha_Hora'].dt.month)
+    .groupby('Mes_Num', sort=True)
+    .agg(Demanda_Total_kWh=('Demanda_kWh', 'sum'),
+         Generacion_Total_kWh=('Generacion_Energia_kWh', 'sum'))
+    .reset_index()
+)
+df_balance['Mes_Label'] = df_balance['Mes_Num'].map(meses_es)
+
+fig_balance = go.Figure()
+fig_balance.add_trace(go.Bar(
+    x=df_balance['Mes_Label'],
+    y=df_balance['Demanda_Total_kWh'],
+    name='Demanda (kWh)',
+    marker_color='#3B82F6',
+    text=[f"{v:,.0f}" for v in df_balance['Demanda_Total_kWh']],
+    textposition='outside',
+    textfont=dict(size=10)
+))
+fig_balance.add_trace(go.Bar(
+    x=df_balance['Mes_Label'],
+    y=df_balance['Generacion_Total_kWh'],
+    name='Generación FV (kWh)',
+    marker_color='#F59E0B',
+    text=[f"{v:,.0f}" for v in df_balance['Generacion_Total_kWh']],
+    textposition='outside',
+    textfont=dict(size=10)
+))
+fig_balance.update_layout(
+    barmode='group',
+    xaxis_title="Mes",
+    yaxis_title="Energía (kWh)",
+    hovermode="x unified",
+    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+    margin=dict(l=20, r=20, t=40, b=40),
+    height=420
+)
+st.plotly_chart(fig_balance, use_container_width=True)
+
+# =============================================================================
+# SECCIÓN 3 — INGENIERÍA DE RESILIENCIA ANTE APAGONES
+# =============================================================================
+st.markdown("<hr style='border:none;border-top:2px solid #e2e8f0;margin:2rem 0;'>", unsafe_allow_html=True)
+st.markdown("""
+<div style="border-left:5px solid #8B5CF6; padding:0.5rem 1rem;
+            background:rgba(139,92,246,0.05); border-radius:0 6px 6px 0; margin-bottom:1.2rem;">
+    <span style="font-size:0.7rem;font-weight:600;color:#5B21B6;text-transform:uppercase;letter-spacing:0.06em;">
+        Condicional — Se activa al mover las horas de respaldo por encima de 0
+    </span>
+    <h3 style="margin:0.15rem 0 0 0;color:#1E293B;font-size:1.15rem;">
+        Sección 3 — Ingeniería de Resiliencia ante Apagones
+    </h3>
+    <p style="color:#64748b;font-size:0.82rem;margin:0.25rem 0 0 0;">
+        Dimensionamiento del sistema de respaldo BESS (LiFePO₄) para proteger la carga crítica industrial.
+        Mueve el deslizador para activar el análisis.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+col_s3_inp1, col_s3_inp2 = st.columns([1, 2])
+with col_s3_inp1:
+    horas_respaldo = st.slider(
+        "Horas de respaldo deseadas",
+        min_value=0, max_value=24, value=0, step=1,
+        help="Horas que el BESS debe mantener la carga crítica durante un apagón."
+    )
+with col_s3_inp2:
+    if horas_respaldo > 0:
+        carga_critica_kw = st.number_input(
+            "Potencia de la carga crítica (kW)",
+            min_value=1.0,
+            max_value=float(STREGER_DEMANDA_MAX_KW),
+            value=30.0,
+            step=1.0,
+            help="Potencia total de los equipos críticos que deben permanecer en operación durante el corte."
+        )
+    else:
+        st.info(
+            "Mueve el deslizador de horas hacia la derecha para dimensionar el sistema BESS.",
+            icon="💡"
+        )
+
+if horas_respaldo > 0:
+    # Parámetros de tecnología LiFePO4
+    DOD_LIFEPO4      = 0.80   # Profundidad de descarga segura
+    CAPACIDAD_MODULO = 5.0    # kWh por módulo estándar (ej. Pylontech US5000)
+    CICLOS_MIN       = 4_000
+    CICLOS_MAX       = 5_000
+
+    capacidad_requerida_kwh = horas_respaldo * carga_critica_kw
+    capacidad_instalada_kwh = capacidad_requerida_kwh / DOD_LIFEPO4
+    n_modulos               = int(np.ceil(capacidad_instalada_kwh / CAPACIDAD_MODULO))
+    capacidad_total_kwh     = n_modulos * CAPACIDAD_MODULO
+    vida_min_anos           = round(CICLOS_MIN / 365)
+    vida_max_anos           = round(CICLOS_MAX / 365)
+    pct_carga_critica       = min((carga_critica_kw / resumen['potencia_pico']) * 100, 100.0)
+
+    col_b1, col_b2, col_b3, col_b4 = st.columns(4)
+
+    col_b1.markdown(f"""
+<div style="background:rgba(139,92,246,0.07);border-left:4px solid #8B5CF6;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Capacidad Requerida</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{capacidad_requerida_kwh:.1f} kWh</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">{horas_respaldo}h × {carga_critica_kw:.0f} kW</div>
+</div>""", unsafe_allow_html=True)
+
+    col_b2.markdown(f"""
+<div style="background:rgba(139,92,246,0.07);border-left:4px solid #8B5CF6;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Capacidad Instalada (DoD 80%)</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{capacidad_instalada_kwh:.1f} kWh</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">Protege la vida útil de las celdas</div>
+</div>""", unsafe_allow_html=True)
+
+    col_b3.markdown(f"""
+<div style="background:rgba(139,92,246,0.07);border-left:4px solid #8B5CF6;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Módulos LiFePO₄ Necesarios</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{n_modulos} módulos</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">{CAPACIDAD_MODULO:.0f} kWh c/u → {capacidad_total_kwh:.0f} kWh instalados</div>
+</div>""", unsafe_allow_html=True)
+
+    col_b4.markdown(f"""
+<div style="background:rgba(139,92,246,0.07);border-left:4px solid #8B5CF6;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Vida Útil Estimada</div>
+    <div style="font-size:1.65rem;font-weight:700;color:#1E293B;">{vida_min_anos}–{vida_max_anos} años</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">{CICLOS_MIN:,}–{CICLOS_MAX:,} ciclos garantizados</div>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top:1.2rem;'></div>", unsafe_allow_html=True)
+
+    st.markdown(f"""
+<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.4rem;">
+    <div style="font-weight:600;color:#1E293B;margin-bottom:0.6rem;">
+        📋 Propuesta de Sistema BESS — Tecnología LiFePO₄
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:0.5rem;font-size:0.85rem;color:#475569;">
+        <div>• <strong>Tecnología:</strong> Litio Ferro-Fosfato (LiFePO₄)</div>
+        <div>• <strong>Profundidad de descarga segura:</strong> 80%</div>
+        <div>• <strong>Ciclos garantizados:</strong> {CICLOS_MIN:,} – {CICLOS_MAX:,} ciclos</div>
+        <div>• <strong>Vida útil (1 ciclo/día):</strong> {vida_min_anos} – {vida_max_anos} años</div>
+        <div>• <strong>Módulos propuestos:</strong> {n_modulos} × {CAPACIDAD_MODULO:.0f} kWh c/u</div>
+        <div>• <strong>Capacidad nominal total:</strong> {capacidad_total_kwh:.0f} kWh instalados</div>
+        <div>• <strong>Carga crítica protegida:</strong> {carga_critica_kw:.0f} kW por {horas_respaldo} h</div>
+        <div>• <strong>Carga crítica vs. pico de planta:</strong> {pct_carga_critica:.1f}%</div>
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# =============================================================================
+# ANÁLISIS ECONÓMICO Y DE AHORROS
+# =============================================================================
+st.subheader("💰 Análisis de Impacto Económico")
+
+col_econ1, col_econ2, col_econ3 = st.columns(3)
+ahorro_promedio_mes = st.session_state.ahorro_anual / 12
+render_kpi(col_econ1, "Tarifa Eléctrica Base",           f"{precio_kwh:.2f} {divisa}/kWh")
+render_kpi(col_econ2, "Ahorro Económico Anual Estimado", f"{st.session_state.ahorro_anual:,.2f} {divisa}")
+render_kpi(col_econ3, "Ahorro Mensual Promedio",         f"{ahorro_promedio_mes:,.2f} {divisa}")
+
+st.markdown("<div style='margin-bottom:1.5rem;'></div>", unsafe_allow_html=True)
+
+with st.expander("📊 Ver desglose y tabla de ahorros mes por mes", expanded=False):
+    st.markdown("Retorno económico mensualizado calculado de forma directa:")
+
+    tabla_formateada = st.session_state.df_mensual[
+        ['Mes', 'Generacion_Energia_kWh', 'Ahorro_Monetario']
+    ].copy()
+    tabla_formateada.columns = [
+        'Mes de Simulación',
+        'Energía Generada (kWh)',
+        f'Ahorro Estimado ({divisa})'
+    ]
+    st.dataframe(
+        tabla_formateada.style.format({
+            'Energía Generada (kWh)':                    '{:,.2f}',
+            f'Ahorro Estimado ({divisa})':               '${:,.2f}'
+        }),
+        use_container_width=True
+    )
+
+st.markdown("<div style='margin-bottom:1.5rem;'></div>", unsafe_allow_html=True)
+
+# =============================================================================
+# SECCIÓN 4 — EVALUACIÓN FINANCIERA DE CONTINUIDAD DE NEGOCIO
+# =============================================================================
+st.markdown("<hr style='border:none;border-top:2px solid #e2e8f0;margin:2rem 0;'>", unsafe_allow_html=True)
+st.markdown("""
+<div style="border-left:5px solid #10B981; padding:0.5rem 1rem;
+            background:rgba(16,185,129,0.05); border-radius:0 6px 6px 0; margin-bottom:1.2rem;">
+    <span style="font-size:0.7rem;font-weight:600;color:#065F46;text-transform:uppercase;letter-spacing:0.06em;">
+        Condicional — Desbloquear para análisis de rentabilidad avanzado
+    </span>
+    <h3 style="margin:0.15rem 0 0 0;color:#1E293B;font-size:1.15rem;">
+        Sección 4 — Evaluación Financiera de Continuidad de Negocio
+    </h3>
+    <p style="color:#64748b;font-size:0.82rem;margin:0.25rem 0 0 0;">
+        ROI, payback y simulación de cashflow a 25 años. Ingresa las cotizaciones reales del sistema.
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+with st.expander("🔓 Activar análisis de rentabilidad avanzado", expanded=False):
+
+    st.markdown("##### Parámetros de Inversión y Continuidad")
+    col_inv1, col_inv2, col_inv3 = st.columns(3)
+
+    with col_inv1:
+        default_solar = round(resumen['potencia_disponible'] * 15_000, -4)
+        costo_sistema_solar = st.number_input(
+            "Inversión total sistema solar (MXN)",
+            min_value=0.0,
+            value=float(default_solar),
+            step=10_000.0,
+            format="%.0f",
+            help="Costo total instalado: paneles + inversor + montaje + mano de obra. Referencia: ~$15,000 MXN/kWp."
+        )
+
+    with col_inv2:
+        reparaciones_anuales = st.number_input(
+            "Costo anual por apagones (MXN/año)",
+            min_value=0.0,
+            value=150_000.0,
+            step=10_000.0,
+            format="%.0f",
+            help="Suma histórica anual de reparaciones, tiempos muertos y pérdidas de producción por cortes eléctricos."
+        )
+
+    with col_inv3:
+        default_bess_cost = float(n_modulos * 18_000) if horas_respaldo > 0 else 0.0
+        costo_bess = st.number_input(
+            "Cotización del banco BESS (MXN)",
+            min_value=0.0,
+            value=default_bess_cost,
+            step=10_000.0,
+            format="%.0f",
+            help="Cotización real con proveedor. Referencia: ~$18,000 MXN por módulo LiFePO₄ de 5 kWh."
+        )
+
+    tasa_descuento = st.slider(
+        "Tasa de descuento anual (%) — para cálculo de VPN",
+        min_value=0.0, max_value=25.0, value=8.0, step=0.5,
+        help="Usa la TIIE o tu costo de capital. A 0% equivale al payback simple."
+    ) / 100.0
+
+    # ── Cálculos ──────────────────────────────────────────────────────────────
+    VIDA_UTIL        = 25
+    ahorro_e_anual   = st.session_state.ahorro_anual
+    ahorro_bess      = reparaciones_anuales if costo_bess > 0 else 0.0
+    inversion_total  = costo_sistema_solar + costo_bess
+
+    anos = list(range(0, VIDA_UTIL + 1))
+
+    # Flujos anuales discretos
+    flujo_solar  = [-costo_sistema_solar]  + [ahorro_e_anual] * VIDA_UTIL
+    flujo_combo  = [-inversion_total]      + [ahorro_e_anual + ahorro_bess] * VIDA_UTIL
+
+    # Cashflow acumulado
+    cf_solar_acum = list(np.cumsum(flujo_solar))
+    cf_combo_acum = list(np.cumsum(flujo_combo))
+
+    # Payback simple
+    payback_solar_a = next((i for i, v in enumerate(cf_solar_acum) if v >= 0), None)
+    payback_combo_a = next((i for i, v in enumerate(cf_combo_acum) if v >= 0), None)
+
+    # VPN
+    vpn_solar = sum(v / (1 + tasa_descuento) ** t for t, v in enumerate(flujo_solar))
+    vpn_combo = sum(v / (1 + tasa_descuento) ** t for t, v in enumerate(flujo_combo))
+
+    # ── KPIs ──────────────────────────────────────────────────────────────────
+    col_k1, col_k2, col_k3, col_k4 = st.columns(4)
+
+    pb_solar_str = f"{payback_solar_a} años" if payback_solar_a else f"> {VIDA_UTIL} años"
+    pb_combo_str = f"{payback_combo_a} años" if payback_combo_a else f"> {VIDA_UTIL} años"
+
+    col_k1.markdown(f"""
+<div style="background:rgba(16,185,129,0.07);border-left:4px solid #10B981;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Inversión Total del Proyecto</div>
+    <div style="font-size:1.5rem;font-weight:700;color:#1E293B;">${inversion_total:,.0f}</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">Solar + BESS (MXN)</div>
+</div>""", unsafe_allow_html=True)
+
+    col_k2.markdown(f"""
+<div style="background:rgba(16,185,129,0.07);border-left:4px solid #10B981;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Payback Solar (simple)</div>
+    <div style="font-size:1.5rem;font-weight:700;color:#1E293B;">{pb_solar_str}</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">Ahorro: ${ahorro_e_anual:,.0f} MXN/año</div>
+</div>""", unsafe_allow_html=True)
+
+    col_k3.markdown(f"""
+<div style="background:rgba(16,185,129,0.07);border-left:4px solid #10B981;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">Payback Solar + BESS</div>
+    <div style="font-size:1.5rem;font-weight:700;color:#1E293B;">{pb_combo_str}</div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">Ahorro total: ${ahorro_e_anual + ahorro_bess:,.0f} MXN/año</div>
+</div>""", unsafe_allow_html=True)
+
+    col_k4.markdown(f"""
+<div style="background:rgba(16,185,129,0.07);border-left:4px solid #10B981;
+            border-radius:6px;padding:14px 18px;height:100%;">
+    <div style="font-size:0.78rem;color:#64748b;margin-bottom:6px;">VPN Solar (tasa {tasa_descuento*100:.1f}%)</div>
+    <div style="font-size:1.5rem;font-weight:700;color:{'#16a34a' if vpn_solar >= 0 else '#dc2626'}">
+        ${vpn_solar:,.0f}
+    </div>
+    <div style="font-size:0.72rem;color:#94a3b8;margin-top:4px;">
+        {'Proyecto rentable ✓' if vpn_solar >= 0 else 'Revisar supuestos ✗'}
+    </div>
+</div>""", unsafe_allow_html=True)
+
+    st.markdown("<div style='margin-top:1.5rem;'></div>", unsafe_allow_html=True)
+
+    # ── Gráfica de Cashflow ────────────────────────────────────────────────────
+    fig_cf = go.Figure()
+
+    # Barras de flujo anual — escenario solo solar
+    colores_barras = ['#ef4444' if v < 0 else 'rgba(245,158,11,0.65)' for v in flujo_solar]
+    fig_cf.add_trace(go.Bar(
+        x=anos,
+        y=[v / 1_000 for v in flujo_solar],
+        name='Flujo Anual Solar',
+        marker_color=colores_barras,
+        showlegend=True
+    ))
+
+    # Barras incrementales del BESS (apiladas sobre las de solar)
+    if costo_bess > 0:
+        flujo_bess_incremental = [-costo_bess] + [ahorro_bess] * VIDA_UTIL
+        colores_bess = ['#7c3aed' if v < 0 else 'rgba(139,92,246,0.65)' for v in flujo_bess_incremental]
+        fig_cf.add_trace(go.Bar(
+            x=anos,
+            y=[v / 1_000 for v in flujo_bess_incremental],
+            name='Flujo Incremental BESS',
+            marker_color=colores_bess,
+        ))
+
+    # Líneas de cashflow acumulado (eje secundario)
+    fig_cf.add_trace(go.Scatter(
+        x=anos,
+        y=[v / 1_000 for v in cf_solar_acum],
+        name='Acumulado Solar',
+        mode='lines+markers',
+        marker=dict(size=4),
+        line=dict(color='#d97706', width=2.5),
+        yaxis='y2'
+    ))
+
+    if costo_bess > 0:
+        fig_cf.add_trace(go.Scatter(
+            x=anos,
+            y=[v / 1_000 for v in cf_combo_acum],
+            name='Acumulado Solar + BESS',
+            mode='lines+markers',
+            marker=dict(size=4),
+            line=dict(color='#7c3aed', width=2.5),
+            yaxis='y2'
+        ))
+
+    # Línea de equilibrio en eje secundario
+    fig_cf.add_hline(
+        y=0, yref='y2',
+        line_dash='dash', line_color='#94a3b8', line_width=1.5,
+        annotation_text='Punto de equilibrio', annotation_position='top right'
+    )
+
+    fig_cf.update_layout(
+        title=dict(text=f"Histograma de Flujo de Caja — Proyección a {VIDA_UTIL} Años (miles MXN)", font=dict(size=13)),
+        barmode='relative',
+        xaxis=dict(title="Año", dtick=2),
+        yaxis=dict(title="Flujo Anual (miles MXN)", side='left'),
+        yaxis2=dict(title="Cashflow Acumulado (miles MXN)", overlaying='y', side='right', showgrid=False),
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(l=20, r=60, t=60, b=20),
+        height=460
+    )
+    st.plotly_chart(fig_cf, use_container_width=True)
+
+    # ── Trade-off Tecnológico ─────────────────────────────────────────────────
+    st.markdown("##### ⚖️ Trade-off Tecnológico")
+
+    energia_fv_vida     = ahorro_e_anual / precio_kwh * VIDA_UTIL  # kWh totales generados en vida útil
+    costo_kwh_solar     = costo_sistema_solar / energia_fv_vida if energia_fv_vida > 0 else 0
+    costo_kwh_adicional = (potencia_w / 1000 * 15_000) / \
+                          (kwh_1panel * 365 * VIDA_UTIL) if kwh_1panel > 0 else 0
+
+    if costo_bess > 0 and ahorro_bess > 0:
+        amort_bess_anual = costo_bess / (vida_min_anos if horas_respaldo > 0 else VIDA_UTIL)
+        rentable_bess    = ahorro_bess > amort_bess_anual
+        bess_ratio       = ahorro_bess / amort_bess_anual if amort_bess_anual > 0 else 0
+        bess_color       = '#16a34a' if rentable_bess else '#dc2626'
+        bess_texto       = (f"✅ El BESS se paga solo con los ahorros por apagones: "
+                            f"${ahorro_bess:,.0f} MXN/año ahorrados vs ${amort_bess_anual:,.0f} MXN/año amortización "
+                            f"(ratio {bess_ratio:.1f}×).")  \
+                           if rentable_bess else \
+                           (f"⚠️ El BESS no se justifica únicamente por los ahorros en reparaciones: "
+                            f"${ahorro_bess:,.0f} MXN/año < ${amort_bess_anual:,.0f} MXN/año amortización. "
+                            f"Considerar otros beneficios (continuidad operativa, seguro implícito).")
+    else:
+        bess_color = '#64748b'
+        bess_texto = "Ingresa el costo del BESS y las reparaciones anuales para evaluar su rentabilidad."
+
+    st.markdown(f"""
+<div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:1rem 1.4rem;margin-top:0.5rem;">
+    <div style="margin-bottom:0.7rem;font-size:0.88rem;color:#1E293B;">
+        <strong>¿Más paneles o sistema de enfriamiento activo?</strong><br>
+        Costo del kWh solar a lo largo de la vida útil: <strong>${costo_kwh_solar:.2f} MXN/kWh</strong>.
+        Agregar paneles adicionales tiene un costo marginal similar y no requiere mantenimiento activo,
+        por lo que añadir módulos FV es generalmente preferible a instalar enfriamiento forzado
+        (que añade consumo eléctrico propio y mantenimiento).
+    </div>
+    <div style="font-size:0.88rem;color:{bess_color};">
+        <strong>¿Paneles FV o BESS como prioridad?</strong><br>
+        {bess_texto}
+    </div>
+</div>
+""", unsafe_allow_html=True)
+
+# =============================================================================
+# MÓDULO DE ANÁLISIS AVANZADO
+# =============================================================================
 st.subheader("📊 Módulo de Análisis Avanzado del Proyecto")
 st.markdown("Utiliza el siguiente menú para evaluar parámetros específicos del comportamiento del sistema.")
 
-# Menú desplegable pequeño para seleccionar qué analizar
 opcion_grafica = st.selectbox(
     "Selecciona los datos que deseas analizar en la gráfica:",
     [
         "Comparativa: Generación Con Sombra vs. Sin Sombra",
         "Pérdidas: Fracción de Sombra Total del Arreglo",
         "Financiero: Ahorro Económico Mensualizado",
-        "Recurso Solar: Matriz de Irradiancia Promedio Horaria"  # <-- NUEVA OPCIÓN
+        "Recurso Solar: Matriz de Irradiancia Promedio Horaria"
     ]
 )
 
-# Filtro de fecha reutilizado para la segunda gráfica
-df_filtrado_avanzado = df_analisis[(df_analisis['Fecha_Solo'] >= fecha_inicio) & (df_analisis['Fecha_Solo'] <= fecha_fin)]
+_opciones_con_filtro = [
+    "Comparativa: Generación Con Sombra vs. Sin Sombra",
+    "Pérdidas: Fracción de Sombra Total del Arreglo",
+]
+if opcion_grafica in _opciones_con_filtro:
+    st.caption("Se aplica el rango de fechas seleccionado en la sección anterior.")
+else:
+    st.info("Esta vista muestra datos anuales completos. El filtro de fechas no aplica aquí.", icon="ℹ️")
+
+df_filtrado_avanzado = df_analisis[
+    (df_analisis['Fecha_Solo'] >= fecha_inicio) &
+    (df_analisis['Fecha_Solo'] <= fecha_fin)
+]
 
 if not df_filtrado_avanzado.empty:
     fig_avanzada = go.Figure()
 
     if opcion_grafica == "Comparativa: Generación Con Sombra vs. Sin Sombra":
-        # Línea de generación ideal (Sin sombra)
         fig_avanzada.add_trace(go.Scatter(
             x=df_filtrado_avanzado['Fecha_Hora'], y=df_filtrado_avanzado['Generacion_Sin_Sombra_kW'],
             mode='lines', name='Generación Ideal (Sin Sombra)',
             line=dict(color='#2CA02C', width=2, dash='dash')
         ))
-        # Línea de generación real (Con sombra por filas)
         fig_avanzada.add_trace(go.Scatter(
             x=df_filtrado_avanzado['Fecha_Hora'], y=df_filtrado_avanzado['Generacion_Con_Sombra_kW'],
             mode='lines', name='Generación Real (Con Sombra)',
-            line=dict(color='#636EFA', width=2.5),
-            fill='tozeroy', fillcolor='rgba(99, 110, 250, 0.1)'
+            line=dict(color='#F59E0B', width=2.5),
+            fill='tozeroy', fillcolor='rgba(245, 158, 11, 0.1)'
         ))
-        fig_avanzada.update_layout(yaxis_title="Potencia Eléctrica (kW)")
+        fig_avanzada.update_layout(xaxis_title="Fecha y Hora", yaxis_title="Potencia Eléctrica (kW)")
 
     elif opcion_grafica == "Pérdidas: Fracción de Sombra Total del Arreglo":
-        # Línea de porcentaje o fracción de sombra (va de 0 a 1)
         fig_avanzada.add_trace(go.Scatter(
-            x=df_filtrado_avanzado['Fecha_Hora'], y=df_filtrado_avanzado['Fraccion_Sombra_Arreglo'] * 100,
+            x=df_filtrado_avanzado['Fecha_Hora'],
+            y=df_filtrado_avanzado['Fraccion_Sombra_Arreglo'] * 100,
             mode='lines', name='Área Sombreada del Arreglo (%)',
             line=dict(color='#7F7F7F', width=2),
             fill='tozeroy', fillcolor='rgba(127, 127, 127, 0.2)'
         ))
-        fig_avanzada.update_layout(yaxis_title="Porcentaje de Sombra (%)", yaxis=dict(range=[0, 105]))
+        fig_avanzada.update_layout(
+            xaxis_title="Fecha y Hora",
+            yaxis_title="Porcentaje de Sombra (%)",
+            yaxis=dict(range=[0, 105])
+        )
 
     elif opcion_grafica == "Financiero: Ahorro Económico Mensualizado":
-        # Gráfica de barras para representar el dinero ahorrado al mes
         fig_avanzada.add_trace(go.Bar(
-            x=st.session_state.df_mensual['Mes'], 
+            x=st.session_state.df_mensual['Mes'],
             y=st.session_state.df_mensual['Ahorro_Monetario'],
-            name=f'Ahorro ({st.session_state.divisa})',
+            name=f'Ahorro ({divisa})',
             marker_color='#2CA02C',
             text=[f"${x:,.0f}" for x in st.session_state.df_mensual['Ahorro_Monetario']],
             textposition='auto',
         ))
-        fig_avanzada.update_layout(yaxis_title=f"Ahorro acumulado ({st.session_state.divisa})")
+        fig_avanzada.update_layout(
+            xaxis_title="Mes",
+            yaxis_title=f"Ahorro acumulado ({divisa})"
+        )
 
     elif opcion_grafica == "Recurso Solar: Matriz de Irradiancia Promedio Horaria":
-        # 1. Extraer componentes de hora y mes del DataFrame completo de análisis
-        df_completo = df_analisis.copy()
+        df_completo            = df_analisis.copy()
         df_completo['Hora_Str'] = df_completo['Fecha_Hora'].dt.strftime('%H:00')
-        df_completo['Mes_Num'] = df_completo['Fecha_Hora'].dt.month
-        
-        # Mapeo de meses en español para los encabezados de la matriz
-        meses_es = {1: 'Ene', 2: 'Feb', 3: 'Mar', 4: 'Abr', 5: 'May', 6: 'Jun', 
-                    7: 'Jul', 8: 'Ago', 9: 'Sep', 10: 'Oct', 11: 'Nov', 12: 'Dic'}
-        df_completo['Mes_Str'] = df_completo['Mes_Num'].map(meses_es)
+        df_completo['Mes_Num']  = df_completo['Fecha_Hora'].dt.month
+        df_completo['Mes_Str']  = df_completo['Mes_Num'].map(meses_es)
 
-        # 2. Agrupar por Hora y Mes para obtener el promedio de irradiancia en el plano (POA)
-        df_matriz = df_completo.groupby(['Hora_Str', 'Mes_Num', 'Mes_Str'])['POA_Original_W_m2'].mean().reset_index()
+        df_matriz = df_completo.groupby(
+            ['Hora_Str', 'Mes_Num', 'Mes_Str']
+        )['POA_Original_W_m2'].mean().reset_index()
 
-        # 3. Pivotar los datos para crear el formato de matriz (Filas: Horas, Columnas: Meses)
-        df_pivot = df_matriz.pivot(index='Hora_Str', columns='Mes_Num', values='POA_Original_W_m2')
-        
-        # Reordenar las columnas usando los nombres de los meses en español
+        df_pivot         = df_matriz.pivot(index='Hora_Str', columns='Mes_Num', values='POA_Original_W_m2')
         nombres_columnas = [meses_es[m] for m in sorted(df_pivot.columns)]
-        
-        # 4. Construir el Heatmap con Plotly
+
         fig_avanzada = go.Figure(data=go.Heatmap(
             z=df_pivot.values,
             x=nombres_columnas,
             y=df_pivot.index,
-            colorscale='Jet',  # La escala 'Jet' replica perfectamente el gradiente Azul -> Verde -> Amarillo -> Rojo de tu imagen
+            colorscale='Jet',
             colorbar=dict(title="Irradiancia (W/m²)"),
             hovertemplate="Mes: %{x}<br>Hora: %{y}<br>Irradiancia Promedio: %{z:.1f} W/m²<extra></extra>",
-            text=np.round(df_pivot.values, 0), # Redondeamos los valores a mostrar
-            texttemplate="%{text}",            # Esto dibuja los números dentro de las celdas
-            textfont=dict(size=9, color="black") # Ajuste de fuente para legibilidad
+            text=np.round(df_pivot.values, 0),
+            texttemplate="%{text}",
+            textfont=dict(size=9, color="black")
         ))
-
-        # 5. Configuración estética del layout
         fig_avanzada.update_layout(
-            xaxis=dict(title="Meses", side="top"), # Coloca los meses arriba
-            yaxis=dict(title="Hora del Día", autorange="reversed"), # Invierte el eje Y
-            height=600, 
+            xaxis=dict(title="Meses", side="top"),
+            yaxis=dict(title="Hora del Día", autorange="reversed"),
+            height=600,
             margin=dict(l=40, r=40, t=80, b=40)
         )
 
     fig_avanzada.update_layout(
-        xaxis_title="Fecha y Hora",
         hovermode="x unified",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=40, b=20)
     )
-    
     st.plotly_chart(fig_avanzada, use_container_width=True)
 
 # --- SECCIÓN DE EXPORTACIÓN Y DESCARGAS ---
-st.markdown("---")
-st.subheader("Descarga de Datos Estructurados")
+st.subheader("💾 Descarga de Datos Estructurados")
 
-# Preparación del archivo csv de salida en formato String para el componente de descarga
 csv_data = df_analisis.drop(columns=['Fecha_Solo']).to_csv(index=False).encode('utf-8')
 
 st.download_button(
@@ -468,5 +1100,3 @@ st.download_button(
     mime="text/csv",
     use_container_width=True
 )
-
-
