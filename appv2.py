@@ -332,7 +332,7 @@ tilt_optimo  = calcular_tilt_optimo(latitud)
 with st.sidebar.expander("2. Geometría de Instalación", expanded=True):
     st.caption(f"Ángulo óptimo estimado para lat. {latitud:.2f}°: **{tilt_optimo}°**")
     inclinacion = st.slider("Inclinación / Tilt (°)",   min_value=0, max_value=90,  value=tilt_optimo)
-    azimut      = st.slider("Orientación / Azimut (°)", min_value=0, max_value=360, value=164.78,
+    azimut      = st.slider("Orientación / Azimut (°)", min_value=0, max_value=360, value=165,
                             help="180° indica orientación al Sur")
 
 # Modo de demanda — fuera del form para que sea reactivo y afecte la sección 5
