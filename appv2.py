@@ -432,7 +432,7 @@ with st.sidebar.form(key="formulario_parametros"):
         cantidad_paneles = st.number_input("Número total de paneles", min_value=1, value=216, step=10)
 
     with st.sidebar.expander("4. Configuración de Arreglo (Sombreado)", expanded=False):
-        distancia_filas = st.number_input("Distancia entre filas (m)", value=1.15, step=0.1)
+        distancia_filas = st.number_input("Distancia entre filas (m)", value=0.4, step=0.1)
         longitud_panel  = st.number_input("Longitud física del panel (m)", value=1.134, step=0.1)
         num_filas       = st.number_input("Número de filas", value=9, step=1)
 
